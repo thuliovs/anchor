@@ -1,0 +1,15 @@
+{
+  "name": "anchor",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev:desktop": "pnpm --filter anchor-desktop tauri dev",
+    "dev:mobile": "pnpm --filter anchor-mobile start",
+    "build:desktop": "pnpm --filter anchor-desktop tauri build",
+    "typecheck": "pnpm --recursive exec tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "turbo": "^1.10.0" 
+  }
+}
