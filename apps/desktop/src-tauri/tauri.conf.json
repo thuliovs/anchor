@@ -14,11 +14,19 @@
       {
         "title": "anchor-desktop",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "visible": false
       }
     ],
     "security": {
       "csp": null
+    },
+    "trayIcon": {
+      "id": "main-tray",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": true,
+      "title": "Anchor Desktop"
     }
   },
   "bundle": {
