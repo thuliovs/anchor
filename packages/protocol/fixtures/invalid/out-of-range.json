@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "kind": "motion_sample",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "sequence": 1248,
+  "sessionElapsedUs": 20800000,
+  "linearAccelerationMps2": {
+    "x": -0.21,
+    "y": -245,
+    "z": 0.08
+  },
+  "gravityMps2": {
+    "x": 0.03,
+    "y": -0.12,
+    "z": -9.8
+  },
+  "angularVelocityRadS": {
+    "x": 0.01,
+    "y": -0.02,
+    "z": 0.18
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anchor.dev/schema/motion-sample.v1.schema.json",
+  "title": "MotionSampleV1",
+  "type": "object",
+  "description": "Anchor motion protocol v1 sample. All vectors use the calibrated vehicle frame: X positive = right, Y positive = forward, Z positive = up. sessionElapsedUs is a monotonic session-relative clock in microseconds, not a Unix timestamp or wall-clock time. sessionId is an opaque identifier and is not authentication.",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "kind",
+    "sessionId",
+    "sequence",
+    "sessionElapsedUs",
+    "linearAccelerationMps2",
+    "gravityMps2",
+    "angularVelocityRadS"
+  ],
+  "$defs": {
+    "Vector3": {
+      "type": "object",
+      "description": "Three-axis vector in the calibrated vehicle frame: X positive = right, Y positive = forward, Z positive = up.",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "properties": {
+    "protocolVersion": {
+      "const": 1,
+      "description": "Protocol version. Incompatible changes must use protocolVersion 2 or later."
+    },
+    "kind": {
+      "const": "motion_sample",
+      "description": "Discriminator for monotonic motion samples."
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Opaque session identifier. This field is not authentication or authorization material."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "Unsigned 32-bit sample sequence number."
+    },
+    "sessionElapsedUs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Monotonic microseconds elapsed since the session start. This is not a Unix timestamp or wall-clock time."
+    },
+    "linearAccelerationMps2": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Vector3"
+        },
+        {
+          "type": "object",
+          "description": "Linear acceleration without gravity in meters per second squared.",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -200,
+              "maximum": 200,
+              "description": "Linear acceleration along vehicle-right axis in m/s^2."
+            },
+            "y": {
+              "type": "number",
+              "minimum": -200,
+              "maximum": 200,
+              "description": "Linear acceleration along vehicle-forward axis in m/s^2. Forward acceleration has y > 0 and braking has y < 0."
+            },
+            "z": {
+              "type": "number",
+              "minimum": -200,
+              "maximum": 200,
+              "description": "Linear acceleration along vehicle-up axis in m/s^2."
+            }
+          }
+        }
+      ]
+    },
+    "gravityMps2": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Vector3"
+        },
+        {
+          "type": "object",
+          "description": "Gravity vector in meters per second squared. When stationary, gravity should be approximately z = -9.80665.",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -20,
+              "maximum": 20,
+              "description": "Gravity along vehicle-right axis in m/s^2."
+            },
+            "y": {
+              "type": "number",
+              "minimum": -20,
+              "maximum": 20,
+              "description": "Gravity along vehicle-forward axis in m/s^2."
+            },
+            "z": {
+              "type": "number",
+              "minimum": -20,
+              "maximum": 20,
+              "description": "Gravity along vehicle-up axis in m/s^2. When stationary, this should be approximately -9.80665."
+            }
+          }
+        }
+      ]
+    },
+    "angularVelocityRadS": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Vector3"
+        },
+        {
+          "type": "object",
+          "description": "Angular velocity in radians per second.",
+          "properties": {
+            "x": {
+              "type": "number",
+              "minimum": -100,
+              "maximum": 100,
+              "description": "Angular velocity around vehicle-right axis in rad/s."
+            },
+            "y": {
+              "type": "number",
+              "minimum": -100,
+              "maximum": 100,
+              "description": "Angular velocity around vehicle-forward axis in rad/s."
+            },
+            "z": {
+              "type": "number",
+              "minimum": -100,
+              "maximum": 100,
+              "description": "Angular velocity around vehicle-up axis in rad/s."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

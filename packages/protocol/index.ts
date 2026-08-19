@@ -1,6 +1,1 @@
-export interface AnchorPacket {
-  x: number;
-  y: number;
-  z: number;
-  timestamp: number;
-}
+export * from './src/index.js';

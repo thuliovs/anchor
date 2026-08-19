@@ -7,7 +7,10 @@
     "dev:mobile": "pnpm --filter anchor-mobile start",
     "build:desktop": "pnpm --filter anchor-desktop tauri build",
     "build:desktop:frontend": "pnpm --filter anchor-desktop build",
-    "typecheck": "pnpm -r --if-present run typecheck"
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "protocol:typecheck": "pnpm --filter @anchor/protocol typecheck",
+    "protocol:test": "pnpm --filter @anchor/protocol test",
+    "protocol:test:rust": "cargo test protocol --manifest-path apps/desktop/src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

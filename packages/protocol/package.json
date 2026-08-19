@@ -8,7 +8,13 @@
     ".": "./index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "ajv": "^8.17.1",
+    "tsx": "^4.20.5"
+  }
 }

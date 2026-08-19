@@ -5,7 +5,9 @@
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "src/**/*.ts", "tests/**/*.ts"]
 }
