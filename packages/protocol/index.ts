@@ -1,0 +1,6 @@
+export interface AnchorPacket {
+  x: number;
+  y: number;
+  z: number;
+  timestamp: number;
+}

@@ -1,7 +1,14 @@
 {
   "name": "@anchor/protocol",
   "version": "0.0.1",
+  "type": "module",
   "main": "index.ts",
   "types": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
   "private": true
 }

@@ -6,7 +6,8 @@
     "dev:desktop": "pnpm --filter anchor-desktop tauri dev",
     "dev:mobile": "pnpm --filter anchor-mobile start",
     "build:desktop": "pnpm --filter anchor-desktop tauri build",
-    "typecheck": "pnpm --recursive exec tsc --noEmit"
+    "build:desktop:frontend": "pnpm --filter anchor-desktop build",
+    "typecheck": "pnpm -r --if-present run typecheck"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

@@ -1,0 +1,62 @@
+node_modules/
+target/
+dist/
+dist-ssr/
+build/
+coverage/
+.turbo/
+.cache/
+.parcel-cache/
+.pnpm-store/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+!.env.example
+
+# Rust / Tauri
+**/src-tauri/target/
+**/src-tauri/gen/schemas/
+
+# Frontend build artifacts
+*.tsbuildinfo
+
+# Android
+**/android/.gradle/
+**/android/app/build/
+**/android/build/
+**/.cxx/
+*.keystore
+*.jks
+!apps/mobile/android/app/debug.keystore
+
+# iOS
+**/ios/Pods/
+**/ios/build/
+**/DerivedData/
+**/*.xcworkspace/xcuserdata/
+**/*.xcodeproj/xcuserdata/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*.tmp
+*~
