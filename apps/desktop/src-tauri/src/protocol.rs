@@ -79,6 +79,29 @@ pub struct MotionSampleV1 {
     pub angular_velocity_rad_s: Vector3,
 }
 
+pub fn parse_validated_datagram(bytes: &[u8]) -> Result<MotionSampleV1, ProtocolParseError> {
+    if bytes.len() > MAX_DATAGRAM_BYTES {
+        return Err(ProtocolParseError::DatagramTooLarge {
+            actual: bytes.len(),
+            max: MAX_DATAGRAM_BYTES,
+        });
+    }
+
+    let sample = match serde_json::from_slice::<MotionSampleV1>(bytes) {
+        Ok(sample) => sample,
+        Err(err) if err.is_syntax() || err.is_eof() => {
+            return Err(ProtocolParseError::MalformedJson)
+        }
+        Err(_) => return Err(ProtocolParseError::InvalidStructure),
+    };
+
+    sample
+        .validate()
+        .map_err(ProtocolParseError::InvalidSemantics)?;
+
+    Ok(sample)
+}
+
 impl MotionSampleV1 {
     pub fn validate(&self) -> Result<(), ProtocolValidationError> {
         let session_id_len = self.session_id.chars().count();
@@ -207,10 +230,34 @@ impl fmt::Display for ProtocolValidationError {
 
 impl Error for ProtocolValidationError {}
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProtocolParseError {
+    DatagramTooLarge { actual: usize, max: usize },
+    MalformedJson,
+    InvalidStructure,
+    InvalidSemantics(ProtocolValidationError),
+}
+
+impl fmt::Display for ProtocolParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DatagramTooLarge { actual, max } => {
+                write!(f, "datagram too large: {} bytes exceeds {}", actual, max)
+            }
+            Self::MalformedJson => write!(f, "malformed JSON datagram"),
+            Self::InvalidStructure => write!(f, "invalid datagram structure"),
+            Self::InvalidSemantics(err) => write!(f, "invalid datagram semantics: {}", err),
+        }
+    }
+}
+
+impl Error for ProtocolParseError {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MotionSampleV1, PacketKind, ProtocolValidationError, MAX_DATAGRAM_BYTES, PROTOCOL_VERSION,
+        parse_validated_datagram, MotionSampleV1, PacketKind, ProtocolParseError,
+        ProtocolValidationError, MAX_DATAGRAM_BYTES, PROTOCOL_VERSION,
     };
     use serde_json::{json, Value};
 
@@ -236,6 +283,68 @@ mod tests {
     }
 
     #[test]
+    fn parse_validated_datagram_accepts_valid_fixture() {
+        let sample = parse_validated_datagram(VALID_FIXTURE.as_bytes()).expect("valid fixture");
+
+        assert_eq!(u8::from(sample.protocol_version), PROTOCOL_VERSION);
+        assert_eq!(sample.kind, PacketKind::MotionSample);
+    }
+
+    #[test]
+    fn parse_validated_datagram_rejects_malformed_json() {
+        let err = parse_validated_datagram(br#"{"#).expect_err("malformed json must fail");
+
+        assert!(matches!(err, ProtocolParseError::MalformedJson));
+    }
+
+    #[test]
+    fn parse_validated_datagram_rejects_semantically_invalid_fixture() {
+        let err = parse_validated_datagram(INVALID_OUT_OF_RANGE.as_bytes())
+            .expect_err("semantic validation must fail");
+
+        assert!(matches!(
+            err,
+            ProtocolParseError::InvalidSemantics(
+                ProtocolValidationError::VectorComponentOutOfRange { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn parse_validated_datagram_rejects_unknown_property() {
+        let err = parse_validated_datagram(INVALID_UNKNOWN_PROPERTY.as_bytes())
+            .expect_err("unknown property must fail");
+
+        assert!(matches!(err, ProtocolParseError::InvalidStructure));
+    }
+
+    #[test]
+    fn parse_validated_datagram_rejects_unsupported_version() {
+        let err = parse_validated_datagram(INVALID_UNSUPPORTED_VERSION.as_bytes())
+            .expect_err("unsupported version must fail");
+
+        assert!(matches!(err, ProtocolParseError::InvalidStructure));
+    }
+
+    #[test]
+    fn parse_validated_datagram_rejects_datagram_larger_than_limit() {
+        let oversized = vec![b'a'; MAX_DATAGRAM_BYTES + 1];
+
+        let err = parse_validated_datagram(&oversized).expect_err("oversized datagram must fail");
+
+        assert!(matches!(
+            err,
+            ProtocolParseError::DatagramTooLarge {
+                max: MAX_DATAGRAM_BYTES,
+                ..
+            }
+        ));
+        if let ProtocolParseError::DatagramTooLarge { actual, .. } = err {
+            assert_eq!(actual, MAX_DATAGRAM_BYTES + 1);
+        }
+    }
+
+    #[test]
     fn invalid_fixtures_are_rejected_or_invalidated() {
         let fixtures = [
             INVALID_UNSUPPORTED_VERSION,
@@ -245,14 +354,11 @@ mod tests {
         ];
 
         for fixture in fixtures {
-            match serde_json::from_str::<MotionSampleV1>(fixture) {
-                Ok(sample) => {
-                    assert!(
-                        sample.validate().is_err(),
-                        "fixture should be invalid: {fixture}"
-                    );
-                }
-                Err(_) => {}
+            if let Ok(sample) = serde_json::from_str::<MotionSampleV1>(fixture) {
+                assert!(
+                    sample.validate().is_err(),
+                    "fixture should be invalid: {fixture}"
+                );
             }
         }
     }

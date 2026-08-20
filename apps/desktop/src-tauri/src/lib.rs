@@ -1,18 +1,29 @@
 use image::GenericImageView;
-use std::process;
+use std::{
+    process,
+    sync::{Arc, Mutex},
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 pub mod protocol;
+pub mod receiver;
+
+use receiver::{
+    udp::{start_udp_receiver, UdpReceiverConfig, UdpReceiverHandle},
+    ReceiverState, SharedReceiverState,
+};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
+
+type SharedReceiverHandle = Arc<Mutex<Option<UdpReceiverHandle>>>;
 
 fn create_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Error> {
     let menu = Menu::new(app)?;
@@ -38,6 +49,33 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet])
         .setup(|app| {
+            let receiver_state: SharedReceiverState =
+                Arc::new(Mutex::new(ReceiverState::default()));
+            let receiver_handle: SharedReceiverHandle = Arc::new(Mutex::new(None));
+
+            app.manage(receiver_state.clone());
+            app.manage(receiver_handle.clone());
+
+            tauri::async_runtime::spawn(async move {
+                match start_udp_receiver(UdpReceiverConfig::default(), receiver_state).await {
+                    Ok(handle) => {
+                        if let Ok(mut slot) = receiver_handle.lock() {
+                            *slot = Some(handle);
+                        } else {
+                            eprintln!("failed to store motion receiver handle");
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "failed to start motion receiver on {}:{}: {}",
+                            receiver::DEFAULT_RECEIVER_HOST,
+                            receiver::DEFAULT_RECEIVER_PORT,
+                            err
+                        );
+                    }
+                }
+            });
+
             let menu = create_tray_menu(app.handle())?;
 
             // Carrega o ícone do tray usando a biblioteca image
