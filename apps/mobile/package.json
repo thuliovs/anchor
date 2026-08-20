@@ -7,15 +7,19 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest",
+    "test": "node ./scripts/run-jest.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "codegenConfig": {
+    "name": "NativeMotionSensorsSpec",
+    "type": "modules",
+    "jsSrcsDir": "specs"
+  },
   "dependencies": {
+    "@anchor/protocol": "workspace:*",
     "react": "19.2.0",
     "react-native": "0.83.0",
-    "@react-native/new-app-screen": "0.83.0",
-    "react-native-safe-area-context": "^5.5.2",
-    "@anchor/protocol": "workspace:*"
+    "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -25,7 +29,9 @@
     "@react-native-community/cli-platform-android": "20.0.0",
     "@react-native-community/cli-platform-ios": "20.0.0",
     "@react-native/babel-preset": "0.83.0",
+    "@react-native/codegen": "0.83.0",
     "@react-native/eslint-config": "0.83.0",
+    "@react-native/gradle-plugin": "0.83.0",
     "@react-native/metro-config": "0.83.0",
     "@react-native/typescript-config": "0.83.0",
     "@types/jest": "^29.5.13",

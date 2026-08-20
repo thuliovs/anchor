@@ -63,9 +63,6 @@ importers:
       '@anchor/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@react-native/new-app-screen':
-        specifier: 0.83.0
-        version: 0.83.0(@types/react@19.2.7)(react-native@0.83.0(@babel/core@7.28.5)(@react-native-community/cli@20.0.0(typescript@5.8.3))(@react-native/metro-config@0.83.0(@babel/core@7.28.5))(@types/react@19.2.7)(react@19.2.0))(react@19.2.0)
       react:
         specifier: 19.2.0
         version: 19.2.0
@@ -97,9 +94,15 @@ importers:
       '@react-native/babel-preset':
         specifier: 0.83.0
         version: 0.83.0(@babel/core@7.28.5)
+      '@react-native/codegen':
+        specifier: 0.83.0
+        version: 0.83.0(@babel/core@7.28.5)
       '@react-native/eslint-config':
         specifier: 0.83.0
         version: 0.83.0(eslint@8.57.1)(jest@29.7.0(@types/node@24.13.3))(prettier@2.8.8)(typescript@5.8.3)
+      '@react-native/gradle-plugin':
+        specifier: 0.83.0
+        version: 0.83.0
       '@react-native/metro-config':
         specifier: 0.83.0
         version: 0.83.0(@babel/core@7.28.5)
@@ -1391,17 +1394,6 @@ packages:
   '@react-native/metro-config@0.83.0':
     resolution: {integrity: sha512-7mWZNZOJJLMJ8adBrAgAXcwtyn8PtPjAGavK8k3/mtsWYm79ncf5PD8D9puh6wBHCYwPu2ff/l23nNV8JsqLyg==}
     engines: {node: '>= 20.19.4'}
-
-  '@react-native/new-app-screen@0.83.0':
-    resolution: {integrity: sha512-kqlN+vNwgXgQPJ7SxXWgizS8ogBCS/0qwVMl1g8UGtjVql2tZi/rSJ2znUgdH2tHMnN9SASM285Cc/g5r5gU6A==}
-    engines: {node: '>= 20.19.4'}
-    peerDependencies:
-      '@types/react': ^19.1.0
-      react: '*'
-      react-native: '*'
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
 
   '@react-native/normalize-colors@0.83.0':
     resolution: {integrity: sha512-DG1ELOqQ6RS82R1zEUGTWa/pfSPOf+vwAnQB7Ao1vRuhW/xdd2OPQJyqx5a5QWMYpGrlkCb7ERxEVX6p2QODCA==}
@@ -5731,13 +5723,6 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
-
-  '@react-native/new-app-screen@0.83.0(@types/react@19.2.7)(react-native@0.83.0(@babel/core@7.28.5)(@react-native-community/cli@20.0.0(typescript@5.8.3))(@react-native/metro-config@0.83.0(@babel/core@7.28.5))(@types/react@19.2.7)(react@19.2.0))(react@19.2.0)':
-    dependencies:
-      react: 19.2.0
-      react-native: 0.83.0(@babel/core@7.28.5)(@react-native-community/cli@20.0.0(typescript@5.8.3))(@react-native/metro-config@0.83.0(@babel/core@7.28.5))(@types/react@19.2.7)(react@19.2.0)
-    optionalDependencies:
-      '@types/react': 19.2.7
 
   '@react-native/normalize-colors@0.83.0': {}
 
