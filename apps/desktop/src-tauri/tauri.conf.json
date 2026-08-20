@@ -12,10 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "anchor-desktop",
+        "title": "Anchor - Diagnostico de Movimento",
         "width": 800,
         "height": 600,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {

@@ -1,6 +1,7 @@
 pub mod udp;
 
 use crate::protocol::MotionSampleV1;
+use serde::Serialize;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -18,6 +19,14 @@ pub type SharedReceiverState = Arc<Mutex<ReceiverState>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamStatus {
+    Active,
+    Stale,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiverStatusDto {
     Active,
     Stale,
     Disconnected,
@@ -43,6 +52,30 @@ pub struct ReceiverSnapshot {
     pub last_valid_received_at: Option<Instant>,
     pub metrics: ReceiverMetrics,
     pub status: StreamStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiverSnapshotDto {
+    pub status: ReceiverStatusDto,
+    pub last_sample: Option<MotionSampleV1>,
+    pub active_sender: Option<String>,
+    pub active_session_id: Option<String>,
+    pub last_sequence: Option<u32>,
+    pub last_valid_age_ms: Option<u64>,
+    pub metrics: ReceiverMetricsDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiverMetricsDto {
+    pub received_datagrams: u64,
+    pub accepted_samples: u64,
+    pub oversized_datagrams: u64,
+    pub invalid_packets: u64,
+    pub duplicate_or_out_of_order_packets: u64,
+    pub foreign_session_packets: u64,
+    pub rate_limited_datagrams: u64,
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +204,47 @@ impl ReceiverState {
     }
 }
 
+impl ReceiverSnapshot {
+    pub fn to_dto(&self, now: Instant) -> ReceiverSnapshotDto {
+        ReceiverSnapshotDto {
+            status: self.status.into(),
+            last_sample: self.last_sample.clone(),
+            active_sender: self.active_sender.map(|sender| sender.to_string()),
+            active_session_id: self.active_session_id.clone(),
+            last_sequence: self.last_sequence,
+            last_valid_age_ms: self.last_valid_received_at.map(|last_seen| {
+                let elapsed_ms = now.saturating_duration_since(last_seen).as_millis();
+                u64::try_from(elapsed_ms).unwrap_or(u64::MAX)
+            }),
+            metrics: self.metrics.clone().into(),
+        }
+    }
+}
+
+impl From<ReceiverMetrics> for ReceiverMetricsDto {
+    fn from(value: ReceiverMetrics) -> Self {
+        Self {
+            received_datagrams: value.received_datagrams,
+            accepted_samples: value.accepted_samples,
+            oversized_datagrams: value.oversized_datagrams,
+            invalid_packets: value.invalid_packets,
+            duplicate_or_out_of_order_packets: value.duplicate_or_out_of_order_packets,
+            foreign_session_packets: value.foreign_session_packets,
+            rate_limited_datagrams: value.rate_limited_datagrams,
+        }
+    }
+}
+
+impl From<StreamStatus> for ReceiverStatusDto {
+    fn from(value: StreamStatus) -> Self {
+        match value {
+            StreamStatus::Active => Self::Active,
+            StreamStatus::Stale => Self::Stale,
+            StreamStatus::Disconnected => Self::Disconnected,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FixedWindowRateLimiter {
     limit: u32,
@@ -212,16 +286,17 @@ impl FixedWindowRateLimiter {
 mod tests {
     use super::{
         udp::{start_udp_receiver, UdpReceiverConfig},
-        FixedWindowRateLimiter, ReceiverState, SharedReceiverState, StreamStatus,
-        MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
+        FixedWindowRateLimiter, ReceiverMetrics, ReceiverState, ReceiverStatusDto,
+        SharedReceiverState, StreamStatus, MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
     };
     use crate::protocol::MotionSampleV1;
+    use serde_json::json;
     use std::{
         net::SocketAddr,
         sync::{Arc, Mutex},
         time::{Duration, Instant},
     };
-    use tokio::net::UdpSocket;
+    use tokio::{net::UdpSocket, sync::watch};
 
     const VALID_FIXTURE: &str =
         include_str!("../../../../../packages/protocol/fixtures/valid/motion-sample.json");
@@ -403,6 +478,91 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_dto_serializes_with_camel_case() {
+        let now = Instant::now();
+        let mut state = ReceiverState::default();
+        state.apply_sample(sample(12, "session-a"), sender(41000), now);
+
+        let serialized = serde_json::to_value(state.snapshot(now).to_dto(now)).expect("serialize");
+
+        assert_eq!(serialized["status"], json!("active"));
+        assert_eq!(serialized["activeSender"], json!("127.0.0.1:41000"));
+        assert_eq!(serialized["activeSessionId"], json!("session-a"));
+        assert_eq!(serialized["lastSequence"], json!(12));
+        assert!(serialized.get("active_sender").is_none());
+        assert!(serialized["metrics"].get("receivedDatagrams").is_some());
+    }
+
+    #[test]
+    fn snapshot_dto_preserves_status_values() {
+        assert_eq!(
+            ReceiverStatusDto::from(StreamStatus::Active),
+            ReceiverStatusDto::Active
+        );
+        assert_eq!(
+            ReceiverStatusDto::from(StreamStatus::Stale),
+            ReceiverStatusDto::Stale
+        );
+        assert_eq!(
+            ReceiverStatusDto::from(StreamStatus::Disconnected),
+            ReceiverStatusDto::Disconnected
+        );
+    }
+
+    #[test]
+    fn snapshot_dto_calculates_monotonic_age() {
+        let now = Instant::now();
+        let mut state = ReceiverState::default();
+        state.apply_sample(sample(0, "session-a"), sender(41000), now);
+
+        let dto = state.snapshot(now).to_dto(now + Duration::from_millis(333));
+
+        assert_eq!(dto.last_valid_age_ms, Some(333));
+    }
+
+    #[test]
+    fn snapshot_dto_converts_sender_address_to_string() {
+        let now = Instant::now();
+        let mut state = ReceiverState::default();
+        state.apply_sample(sample(0, "session-a"), sender(41042), now);
+
+        let dto = state.snapshot(now).to_dto(now);
+
+        assert_eq!(dto.active_sender.as_deref(), Some("127.0.0.1:41042"));
+    }
+
+    #[test]
+    fn snapshot_dto_preserves_metrics() {
+        let snapshot = super::ReceiverSnapshot {
+            last_sample: None,
+            active_sender: None,
+            active_session_id: None,
+            last_sequence: None,
+            last_valid_received_at: None,
+            status: StreamStatus::Disconnected,
+            metrics: ReceiverMetrics {
+                received_datagrams: 10,
+                accepted_samples: 8,
+                oversized_datagrams: 1,
+                invalid_packets: 2,
+                duplicate_or_out_of_order_packets: 3,
+                foreign_session_packets: 4,
+                rate_limited_datagrams: 5,
+            },
+        };
+
+        let dto = snapshot.to_dto(Instant::now());
+
+        assert_eq!(dto.metrics.received_datagrams, 10);
+        assert_eq!(dto.metrics.accepted_samples, 8);
+        assert_eq!(dto.metrics.oversized_datagrams, 1);
+        assert_eq!(dto.metrics.invalid_packets, 2);
+        assert_eq!(dto.metrics.duplicate_or_out_of_order_packets, 3);
+        assert_eq!(dto.metrics.foreign_session_packets, 4);
+        assert_eq!(dto.metrics.rate_limited_datagrams, 5);
+    }
+
+    #[test]
     fn rate_limiter_allows_up_to_limit_per_window() {
         let start = Instant::now();
         let mut limiter =
@@ -430,12 +590,14 @@ mod tests {
     #[tokio::test]
     async fn udp_receiver_accepts_valid_datagram_and_updates_state() {
         let shared_state: SharedReceiverState = Arc::new(Mutex::new(ReceiverState::default()));
+        let (sample_tx, mut sample_rx) = watch::channel(None);
         let receiver = start_udp_receiver(
             UdpReceiverConfig {
                 bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
                 ..UdpReceiverConfig::default()
             },
             shared_state.clone(),
+            sample_tx,
         )
         .await
         .expect("receiver should start");
@@ -445,6 +607,12 @@ mod tests {
             .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
             .await
             .expect("send datagram");
+
+        sample_rx.changed().await.expect("watch update");
+        let published_sample = sample_rx
+            .borrow_and_update()
+            .clone()
+            .expect("accepted sample should be published");
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -472,7 +640,96 @@ mod tests {
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
         assert_eq!(snapshot.metrics.accepted_samples, 1);
+        assert_eq!(
+            published_sample.sequence,
+            snapshot.last_sequence.expect("sequence")
+        );
 
         receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn udp_receiver_does_not_publish_ignored_samples() {
+        let shared_state: SharedReceiverState = Arc::new(Mutex::new(ReceiverState::default()));
+        let (sample_tx, mut sample_rx) = watch::channel(None);
+        let receiver = start_udp_receiver(
+            UdpReceiverConfig {
+                bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
+                ..UdpReceiverConfig::default()
+            },
+            shared_state.clone(),
+            sample_tx,
+        )
+        .await
+        .expect("receiver should start");
+
+        let sender_socket = UdpSocket::bind("127.0.0.1:0").await.expect("sender bind");
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send initial datagram");
+
+        sample_rx.changed().await.expect("first watch update");
+        let _ = sample_rx.borrow_and_update().clone();
+
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send duplicate datagram");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let duplicate_count = {
+                let state = shared_state.lock().expect("shared state lock");
+                state
+                    .snapshot(Instant::now())
+                    .metrics
+                    .duplicate_or_out_of_order_packets
+            };
+
+            if duplicate_count == 1 {
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "receiver did not process duplicate datagram in time"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            !sample_rx.has_changed().expect("watch receiver state"),
+            "ignored samples must not be published"
+        );
+
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn receiver_watch_channel_coalesces_intermediate_samples() {
+        let (sample_tx, mut sample_rx) = watch::channel(None);
+
+        sample_tx
+            .send(Some(sample(1, "session-a")))
+            .expect("send sample 1");
+        sample_tx
+            .send(Some(sample(2, "session-a")))
+            .expect("send sample 2");
+        sample_tx
+            .send(Some(sample(3, "session-a")))
+            .expect("send sample 3");
+
+        sample_rx.changed().await.expect("watch update");
+        let latest = sample_rx
+            .borrow_and_update()
+            .clone()
+            .expect("latest sample should be available");
+
+        assert_eq!(latest.sequence, 3);
+        assert!(
+            !sample_rx.has_changed().expect("watch receiver state"),
+            "watch should not queue every intermediate sample"
+        );
     }
 }

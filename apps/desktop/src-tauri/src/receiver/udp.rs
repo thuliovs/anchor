@@ -6,7 +6,7 @@ use crate::protocol::{parse_validated_datagram, ProtocolParseError, MAX_DATAGRAM
 use std::{io, net::SocketAddr, time::Duration};
 use tokio::{
     net::UdpSocket,
-    sync::oneshot,
+    sync::{oneshot, watch},
     task::JoinHandle,
     time::{interval_at, Instant as TokioInstant, MissedTickBehavior},
 };
@@ -52,6 +52,7 @@ impl UdpReceiverHandle {
 pub async fn start_udp_receiver(
     config: UdpReceiverConfig,
     shared_state: SharedReceiverState,
+    latest_sample_tx: watch::Sender<Option<crate::protocol::MotionSampleV1>>,
 ) -> io::Result<UdpReceiverHandle> {
     let socket = UdpSocket::bind(config.bind_addr).await?;
     let local_addr = socket.local_addr()?;
@@ -111,7 +112,11 @@ pub async fn start_udp_receiver(
                                     None
                                 } else {
                                     match parse_validated_datagram(&buffer[..received_len]) {
-                                        Ok(sample) => Some(state.apply_sample(sample, sender_addr, now)),
+                                        Ok(sample) => {
+                                            let published_sample = sample.clone();
+                                            let acceptance = state.apply_sample(sample, sender_addr, now);
+                                            Some((acceptance, acceptance.was_accepted().then_some(published_sample)))
+                                        }
                                         Err(ProtocolParseError::DatagramTooLarge { .. }) => {
                                             state.record_oversized_datagram();
                                             None
@@ -127,14 +132,20 @@ pub async fn start_udp_receiver(
                                 None
                             };
 
-                            match outcome {
-                                Some(SampleAcceptance::AcceptedNewSession) => {
-                                    println!("motion receiver session started from {sender_addr}");
+                            if let Some((acceptance, published_sample)) = outcome {
+                                if let Some(sample) = published_sample {
+                                    let _ = latest_sample_tx.send(Some(sample));
                                 }
-                                Some(SampleAcceptance::AcceptedSessionTakeover) => {
-                                    println!("motion receiver session changed after timeout from {sender_addr}");
+
+                                match acceptance {
+                                    SampleAcceptance::AcceptedNewSession => {
+                                        println!("motion receiver session started from {sender_addr}");
+                                    }
+                                    SampleAcceptance::AcceptedSessionTakeover => {
+                                        println!("motion receiver session changed after timeout from {sender_addr}");
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                         Err(err) => {
