@@ -20,7 +20,7 @@ pub struct UdpReceiverConfig {
 impl Default for UdpReceiverConfig {
     fn default() -> Self {
         Self {
-            bind_addr: SocketAddr::from(([127, 0, 0, 1], DEFAULT_RECEIVER_PORT)),
+            bind_addr: SocketAddr::from(([0, 0, 0, 0], DEFAULT_RECEIVER_PORT)),
             metrics_log_interval: Duration::from_secs(1),
         }
     }
@@ -57,7 +57,7 @@ pub async fn start_udp_receiver(
     let socket = UdpSocket::bind(config.bind_addr).await?;
     let local_addr = socket.local_addr()?;
     println!(
-        "motion receiver listening on {local_addr} (expected sample rate: {}Hz)",
+        "motion receiver listening on {local_addr} across all IPv4 interfaces (expected sample rate: {}Hz)",
         EXPECTED_SAMPLE_RATE_HZ
     );
 
@@ -82,7 +82,7 @@ pub async fn start_udp_receiver(
                     if let Ok(state) = shared_state.lock() {
                         let snapshot = state.snapshot(std::time::Instant::now());
                         println!(
-                            "motion receiver metrics: received={} accepted={} oversized={} invalid={} duplicate_or_out_of_order={} foreign_session={} rate_limited={} status={:?}",
+                            "motion receiver metrics: received={} accepted={} oversized={} invalid={} duplicate_or_out_of_order={} foreign_session={} rate_limited={} status={:?} bind_scope=all_ipv4_interfaces",
                             snapshot.metrics.received_datagrams,
                             snapshot.metrics.accepted_samples,
                             snapshot.metrics.oversized_datagrams,

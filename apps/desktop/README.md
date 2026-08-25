@@ -1,15 +1,13 @@
 # Anchor Desktop
 
-Primeira fatia vertical de comunicacao local do Anchor.
+Fatia vertical de comunicacao local do Anchor entre Android e desktop.
 
 ## Escopo atual
 
-O desktop inicia um receptor UDP local em `127.0.0.1:57421`, valida `MotionSampleV1` do protocolo v1 e mantem o estado mais recente em memoria com metricas acumuladas.
+O desktop inicia um receptor UDP em `0.0.0.0:57421`, aceita trafego em todas as interfaces IPv4, valida `MotionSampleV1` do protocolo v1 e mantem o estado mais recente em memoria com metricas acumuladas.
 
 Esta etapa ainda nao implementa:
 
-- conexao com celular;
-- sensores reais;
 - overlay visual;
 - autenticacao;
 - criptografia.
@@ -36,12 +34,14 @@ pnpm dev:simulator -- --duration 5 --pattern sine
 
 ## Endereco e porta padrao
 
-- Host: `127.0.0.1`
+- Bind: `0.0.0.0`
 - Porta: `57421`
 - Taxa esperada do stream: `60 Hz`
 - Limite tecnico de processamento: `240 datagramas por segundo`
 
-O bind permanece apenas em loopback nesta etapa porque ainda nao existe emparelhamento nem autenticacao. Isso reduz a superficie de abuso enquanto o transporte ainda e exclusivamente local.
+O simulador continua funcionando contra `127.0.0.1:57421`, porque o bind em `0.0.0.0` tambem recebe datagramas enviados ao loopback local.
+
+Nao ha descoberta automatica do IP LAN nesta rodada. O firewall tambem nao e alterado automaticamente.
 
 ## Estado do receptor
 
@@ -81,6 +81,32 @@ A ultima amostra nao e apagada imediatamente quando o stream fica `stale` ou `di
 - `rate_limited_datagrams`: pacotes descartados pelo limitador tecnico antes do parse.
 
 Os logs fazem resumo dessas metricas no maximo uma vez por segundo. Nao ha log por pacote.
+
+## Seguranca desta fase
+
+- UDP nesta versao nao possui ACK;
+- UDP nesta versao nao possui autenticacao;
+- UDP nesta versao nao possui criptografia;
+- use o firewall do sistema para restringir a porta `57421` a LAN quando necessario;
+- nao exponha a porta diretamente a internet.
+
+## Validacao manual do fluxo Android -> desktop
+
+1. Descubra manualmente o IPv4 LAN do computador.
+2. Inicie o desktop com `pnpm dev:desktop`.
+3. Confirme nos logs: `motion receiver listening on 0.0.0.0:57421 across all IPv4 interfaces`.
+4. Instale e abra o APK Android.
+5. Informe no celular o IPv4 do computador e a porta `57421`.
+6. Inicie o streaming.
+7. Confirme no desktop:
+   - sender correspondente ao celular;
+   - mesma `sessionId` do mobile;
+   - `sequence` crescente;
+   - taxa proxima de `60 Hz`;
+   - `received` e `accepted` crescendo.
+8. Pare no celular.
+9. Confirme a transicao para `stale` e depois `disconnected`.
+10. Inicie novamente no celular e confirme nova `sessionId`.
 
 ## Estrutura Rust
 

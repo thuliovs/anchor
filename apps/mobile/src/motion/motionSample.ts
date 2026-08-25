@@ -1,4 +1,5 @@
 import {
+  MAX_DATAGRAM_BYTES,
   PROTOCOL_VERSION,
   type MotionSampleV1,
   type Vector3,
@@ -17,6 +18,11 @@ type ValidationReason =
 export type ConversionResult =
   | { ok: true; sample: MotionSampleV1 }
   | { ok: false; reason: ValidationReason };
+
+export interface SerializedMotionSampleDatagram {
+  payload: string;
+  byteLength: number;
+}
 
 const UINT32_MAX = 4_294_967_295;
 const SAFE_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
@@ -73,6 +79,60 @@ export function convertNativeMotionFrameToSample(
   };
 }
 
+export function serializeMotionSampleV1Datagram(
+  sample: MotionSampleV1,
+): SerializedMotionSampleDatagram {
+  const normalizedSample: MotionSampleV1 = {
+    protocolVersion: sample.protocolVersion,
+    kind: sample.kind,
+    sessionId: sample.sessionId,
+    sequence: sample.sequence,
+    sessionElapsedUs: sample.sessionElapsedUs,
+    linearAccelerationMps2: sample.linearAccelerationMps2,
+    gravityMps2: sample.gravityMps2,
+    angularVelocityRadS: sample.angularVelocityRadS,
+  };
+
+  const payload = JSON.stringify(normalizedSample);
+  validateSerializableMotionSample(normalizedSample);
+  const byteLength = assertUtf8DatagramSize(payload);
+
+  return { payload, byteLength };
+}
+
+export function measureUtf8ByteLength(value: string): number {
+  let byteLength = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) {
+      continue;
+    }
+
+    if (codePoint <= 0x7F) {
+      byteLength += 1;
+    } else if (codePoint <= 0x7FF) {
+      byteLength += 2;
+    } else if (codePoint <= 0xFFFF) {
+      byteLength += 3;
+    } else {
+      byteLength += 4;
+      index += 1;
+    }
+  }
+
+  return byteLength;
+}
+
+export function assertUtf8DatagramSize(value: string): number {
+  const byteLength = measureUtf8ByteLength(value);
+  if (byteLength > MAX_DATAGRAM_BYTES) {
+    throw new Error(`Serialized MotionSampleV1 exceeds ${MAX_DATAGRAM_BYTES} bytes.`);
+  }
+
+  return byteLength;
+}
+
 function isNativeMotionFrame(value: unknown): value is NativeMotionFrame {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -102,6 +162,47 @@ function isFiniteVector(vector: Vector3): boolean {
   return Number.isFinite(vector.x)
     && Number.isFinite(vector.y)
     && Number.isFinite(vector.z);
+}
+
+function validateSerializableMotionSample(sample: MotionSampleV1): void {
+  if (sample.protocolVersion !== PROTOCOL_VERSION) {
+    throw new Error(`protocolVersion must be ${PROTOCOL_VERSION}.`);
+  }
+
+  if (sample.kind !== 'motion_sample') {
+    throw new Error('kind must be motion_sample.');
+  }
+
+  const sessionIdLength = Array.from(sample.sessionId).length;
+  if (sessionIdLength === 0 || sessionIdLength > 64) {
+    throw new Error('sessionId must contain between 1 and 64 characters.');
+  }
+
+  if (!isUint32(sample.sequence)) {
+    throw new Error(`sequence must be a uint32 between 0 and ${UINT32_MAX}.`);
+  }
+
+  if (!Number.isSafeInteger(sample.sessionElapsedUs) || sample.sessionElapsedUs < 0) {
+    throw new Error('sessionElapsedUs must be a non-negative safe integer.');
+  }
+
+  validateSerializableVector('linearAccelerationMps2', sample.linearAccelerationMps2, VECTOR_LIMITS.linearAccelerationMps2);
+  validateSerializableVector('gravityMps2', sample.gravityMps2, VECTOR_LIMITS.gravityMps2);
+  validateSerializableVector('angularVelocityRadS', sample.angularVelocityRadS, VECTOR_LIMITS.angularVelocityRadS);
+}
+
+function validateSerializableVector(
+  fieldName: string,
+  vector: Vector3,
+  range: { min: number; max: number },
+): void {
+  if (!isFiniteVector(vector)) {
+    throw new Error(`${fieldName} must contain only finite numeric components.`);
+  }
+
+  if (!isWithinRange(vector, range)) {
+    throw new Error(`${fieldName} must stay within ${range.min}..${range.max}.`);
+  }
 }
 
 function isWithinRange(

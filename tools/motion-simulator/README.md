@@ -46,4 +46,4 @@ pnpm dev:simulator -- --duration 5 --pattern sine
 - verifica que o payload JSON UTF-8 cabe em `1024` bytes;
 - imprime apenas mensagem inicial e resumo final.
 
-Este simulador existe apenas para o fluxo local de desenvolvimento. A conexao com celular ainda nao esta implementada.
+O receptor desktop agora faz bind em `0.0.0.0:57421`, entao o simulador continua funcionando em `127.0.0.1:57421` sem nenhuma mudanca de uso.

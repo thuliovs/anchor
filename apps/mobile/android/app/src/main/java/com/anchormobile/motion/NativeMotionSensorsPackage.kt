@@ -10,6 +10,8 @@ class NativeMotionSensorsPackage : BaseReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? =
     if (name == NativeMotionSensorsModule.NAME) {
       NativeMotionSensorsModule(reactContext)
+    } else if (name == NativeUdpSenderModule.NAME) {
+      NativeUdpSenderModule(reactContext)
     } else {
       null
     }
@@ -19,6 +21,14 @@ class NativeMotionSensorsPackage : BaseReactPackage() {
       NativeMotionSensorsModule.NAME to ReactModuleInfo(
         name = NativeMotionSensorsModule.NAME,
         className = NativeMotionSensorsModule.NAME,
+        canOverrideExistingModule = false,
+        needsEagerInit = false,
+        isCxxModule = false,
+        isTurboModule = true,
+      ),
+      NativeUdpSenderModule.NAME to ReactModuleInfo(
+        name = NativeUdpSenderModule.NAME,
+        className = NativeUdpSenderModule.NAME,
         canOverrideExistingModule = false,
         needsEagerInit = false,
         isCxxModule = false,

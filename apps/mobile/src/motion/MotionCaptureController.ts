@@ -1,12 +1,27 @@
 import type { EventSubscription } from 'react-native';
 import type { MotionSampleV1 } from '@anchor/protocol';
 
-import { convertNativeMotionFrameToSample } from './motionSample';
+import {
+  convertNativeMotionFrameToSample,
+  serializeMotionSampleV1Datagram,
+} from './motionSample';
+import {
+  getUdpSenderModule,
+  type UdpSenderModule,
+} from './nativeUdpSender';
 import {
   getMotionSensorsModule,
   type MotionSensorsModule,
   type SensorAvailability,
 } from './nativeMotionSensors';
+import {
+  SequentialUdpSender,
+  type SequentialUdpSenderMetrics,
+} from './SequentialUdpSender';
+import {
+  validateUdpDestination,
+  type UdpDestination,
+} from './udpDestination';
 
 export type MotionCaptureStatus =
   | 'checking_sensors'
@@ -31,6 +46,9 @@ export interface MotionCaptureSnapshot {
   lastSample: MotionSampleV1 | null;
   errorMessage: string | null;
   wasInterrupted: boolean;
+  transportState: 'idle' | 'opening' | 'socket_ready' | 'sending' | 'error';
+  transportDestination: UdpDestination | null;
+  transportMetrics: SequentialUdpSenderMetrics;
 }
 
 interface AppStateSubscription {
@@ -51,6 +69,7 @@ interface TimerLike {
 
 interface MotionCaptureControllerOptions {
   nativeModule?: MotionSensorsModule | null;
+  udpModule?: UdpSenderModule | null;
   now?: () => number;
   appState?: AppStateLike;
   timers?: TimerLike;
@@ -94,6 +113,7 @@ class ObservedRateTracker {
 export class MotionCaptureController {
   private readonly listeners = new Set<(snapshot: MotionCaptureSnapshot) => void>();
   private readonly nativeModule: MotionSensorsModule | null;
+  private readonly udpModule: UdpSenderModule | null;
   private readonly now: () => number;
   private readonly appState: AppStateLike;
   private readonly timers: TimerLike;
@@ -101,6 +121,7 @@ export class MotionCaptureController {
   private readonly staleThresholdMs: number;
   private readonly uiRefreshIntervalMs: number;
   private readonly rateTracker = new ObservedRateTracker();
+  private readonly udpSender: SequentialUdpSender | null;
 
   private snapshot: MotionCaptureSnapshot = {
     status: 'checking_sensors',
@@ -115,6 +136,9 @@ export class MotionCaptureController {
     lastSample: null,
     errorMessage: null,
     wasInterrupted: false,
+    transportState: 'idle',
+    transportDestination: null,
+    transportMetrics: emptyTransportMetrics(),
   };
 
   private initialized = false;
@@ -131,12 +155,21 @@ export class MotionCaptureController {
 
   constructor(options: MotionCaptureControllerOptions = {}) {
     this.nativeModule = options.nativeModule ?? getMotionSensorsModule();
+    this.udpModule = options.udpModule ?? getUdpSenderModule();
     this.now = options.now ?? defaultNow;
     this.appState = options.appState ?? defaultAppState;
     this.timers = options.timers ?? defaultTimers;
     this.captureRateHz = options.captureRateHz ?? 60;
     this.staleThresholdMs = options.staleThresholdMs ?? 250;
     this.uiRefreshIntervalMs = options.uiRefreshIntervalMs ?? 100;
+    this.udpSender = this.udpModule
+      ? new SequentialUdpSender({
+        transport: this.udpModule,
+        onTransportError: error => {
+          this.handleTransportError(error);
+        },
+      })
+      : null;
   }
 
   subscribe(listener: (snapshot: MotionCaptureSnapshot) => void): () => void {
@@ -167,10 +200,10 @@ export class MotionCaptureController {
       this.refreshTemporalState();
     }, this.uiRefreshIntervalMs);
 
-    if (!this.nativeModule) {
+    if (!this.nativeModule || !this.udpSender) {
       this.updateSnapshot({
         status: 'unsupported',
-        errorMessage: 'Turbo Native Module indisponivel neste ambiente.',
+        errorMessage: 'Turbo Native Modules indisponiveis neste ambiente.',
       });
       return;
     }
@@ -202,11 +235,11 @@ export class MotionCaptureController {
     }
   }
 
-  async startCapture(): Promise<void> {
-    if (this.disposed || !this.nativeModule) {
+  async startCapture(destination?: UdpDestination): Promise<void> {
+    if (this.disposed || !this.nativeModule || !this.udpSender) {
       this.updateSnapshot({
         status: 'unsupported',
-        errorMessage: 'Turbo Native Module indisponivel neste ambiente.',
+        errorMessage: 'Turbo Native Modules indisponiveis neste ambiente.',
       });
       return;
     }
@@ -225,16 +258,22 @@ export class MotionCaptureController {
       return;
     }
 
+    const validation = validateUdpDestination(destination?.host ?? '', destination?.port ?? Number.NaN);
+    if (!validation.ok || validation.destination === null) {
+      this.updateSnapshot({
+        status: 'error',
+        errorMessage: validation.message,
+      });
+      return;
+    }
+
     const generation = this.nextCaptureGeneration();
     this.captureActive = true;
     this.activeCaptureGeneration = generation;
     this.pendingStartGeneration = generation;
     this.lastFrameReceivedAtMs = null;
-    this.captureStartRequestedAtMs = this.now();
+    this.captureStartRequestedAtMs = null;
     this.rateTracker.reset();
-    this.frameSubscription = this.nativeModule.onMotionFrame(frame => {
-      this.handleNativeFrame(frame, generation);
-    });
 
     this.updateSnapshot({
       status: 'starting',
@@ -247,27 +286,49 @@ export class MotionCaptureController {
       lastSampleAgeMs: null,
       errorMessage: null,
       wasInterrupted: false,
+      transportState: 'opening',
+      transportDestination: validation.destination,
+      transportMetrics: emptyTransportMetrics(),
     });
 
     try {
+      await this.udpSender.open(validation.destination);
+      if (!this.isCurrentCaptureGeneration(generation)) {
+        return;
+      }
+
+      this.frameSubscription = this.nativeModule.onMotionFrame(frame => {
+        this.handleNativeFrame(frame, generation);
+      });
+      this.applyTransportSnapshot();
+
+      this.captureStartRequestedAtMs = this.now();
       const result = await this.nativeModule.start(this.captureRateHz);
       if (!this.isCurrentCaptureGeneration(generation)) {
         return;
       }
 
       this.pendingStartGeneration = null;
-      this.updateSnapshot({ sessionId: result.sessionId });
+      this.updateSnapshot({
+        sessionId: result.sessionId,
+        transportState: 'socket_ready',
+      });
     } catch (error) {
       if (!this.isCurrentCaptureGeneration(generation)) {
         return;
       }
 
       this.pendingStartGeneration = null;
+      if (this.udpSender.getSnapshot().state === 'open') {
+        this.udpSender.close();
+      }
       this.teardownCaptureRuntime();
       this.activeCaptureGeneration = null;
       this.updateSnapshot({
         status: 'error',
         errorMessage: toMessage(error),
+        transportState: 'error',
+        transportMetrics: this.udpSender.getMetrics(),
       });
     }
   }
@@ -285,6 +346,7 @@ export class MotionCaptureController {
     if (this.nativeModule) {
       this.nativeModule.stop();
     }
+    this.udpSender?.close();
 
     this.teardownCaptureRuntime();
 
@@ -293,6 +355,8 @@ export class MotionCaptureController {
       observedRateHz: 0,
       lastSampleAgeMs: this.snapshot.lastSampleAgeMs,
       wasInterrupted: reason === 'lifecycle',
+      transportState: 'idle',
+      transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
     });
   }
 
@@ -329,6 +393,19 @@ export class MotionCaptureController {
       return;
     }
 
+    try {
+      const datagram = serializeMotionSampleV1Datagram(converted.sample);
+      this.udpSender?.offerDatagram(datagram.payload);
+    } catch (error) {
+      this.udpSender?.recordRejectedPayload(error);
+      this.snapshot = {
+        ...this.snapshot,
+        rejectedCount: this.snapshot.rejectedCount + 1,
+        transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
+      };
+      return;
+    }
+
     const nowMs = this.now();
     const observedRateHz = this.rateTracker.record(nowMs);
     this.lastFrameReceivedAtMs = nowMs;
@@ -344,6 +421,8 @@ export class MotionCaptureController {
       sequence: converted.sample.sequence,
       sessionElapsedUs: converted.sample.sessionElapsedUs,
       errorMessage: null,
+      transportState: 'sending',
+      transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
     };
   }
 
@@ -363,14 +442,23 @@ export class MotionCaptureController {
 
       const waitMs = Math.max(0, Math.round(this.now() - this.captureStartRequestedAtMs));
       if (waitMs > this.staleThresholdMs && this.snapshot.status !== 'stale') {
-        this.updateSnapshot({ status: 'stale' });
+        this.updateSnapshot({
+          status: 'stale',
+          transportState: this.resolveTransportState('stale'),
+          transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
+        });
       }
       return;
     }
 
     const ageMs = Math.max(0, Math.round(this.now() - this.lastFrameReceivedAtMs));
     const status = ageMs > this.staleThresholdMs ? 'stale' : 'active';
-    this.updateSnapshot({ lastSampleAgeMs: ageMs, status });
+    this.updateSnapshot({
+      lastSampleAgeMs: ageMs,
+      status,
+      transportState: this.resolveTransportState(status),
+      transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
+    });
   }
 
   private teardownCaptureRuntime(): void {
@@ -380,6 +468,63 @@ export class MotionCaptureController {
     this.lastFrameReceivedAtMs = null;
     this.captureStartRequestedAtMs = null;
     this.rateTracker.reset();
+  }
+
+  private handleTransportError(error: Error): void {
+    if (!this.captureActive) {
+      return;
+    }
+
+    if (this.nativeModule) {
+      this.nativeModule.stop();
+    }
+    this.udpSender?.close();
+    this.teardownCaptureRuntime();
+    this.activeCaptureGeneration = null;
+    this.pendingStartGeneration = null;
+    this.updateSnapshot({
+      status: 'error',
+      errorMessage: toMessage(error),
+      transportState: 'error',
+      transportMetrics: this.udpSender?.getMetrics() ?? this.snapshot.transportMetrics,
+    });
+  }
+
+  private applyTransportSnapshot(): void {
+    if (!this.udpSender) {
+      return;
+    }
+
+    const transportSnapshot = this.udpSender.getSnapshot();
+    this.snapshot = {
+      ...this.snapshot,
+      transportState: this.resolveTransportState(this.snapshot.status, transportSnapshot.state),
+      transportMetrics: transportSnapshot.metrics,
+      transportDestination: transportSnapshot.destination ?? this.snapshot.transportDestination,
+    };
+  }
+
+  private resolveTransportState(
+    status: MotionCaptureStatus,
+    senderState: 'closed' | 'opening' | 'open' | 'error' = this.udpSender?.getSnapshot().state ?? 'closed',
+  ): MotionCaptureSnapshot['transportState'] {
+    if (senderState === 'error' || status === 'error') {
+      return 'error';
+    }
+
+    if (senderState === 'opening' || status === 'starting') {
+      return 'opening';
+    }
+
+    if (senderState === 'open' && (status === 'active' || status === 'stale')) {
+      return 'sending';
+    }
+
+    if (senderState === 'open') {
+      return 'socket_ready';
+    }
+
+    return 'idle';
   }
 
   private nextCaptureGeneration(): number {
@@ -437,4 +582,15 @@ function toMessage(error: unknown): string {
   }
 
   return 'Falha inesperada ao acessar sensores.';
+}
+
+function emptyTransportMetrics(): SequentialUdpSenderMetrics {
+  return {
+    offeredDatagrams: 0,
+    sentDatagrams: 0,
+    droppedBackpressure: 0,
+    rejectedPayloads: 0,
+    sendErrors: 0,
+    lastTransportError: null,
+  };
 }

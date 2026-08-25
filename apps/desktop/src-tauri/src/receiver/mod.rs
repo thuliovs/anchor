@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const DEFAULT_RECEIVER_HOST: &str = "127.0.0.1";
+pub const DEFAULT_RECEIVER_HOST: &str = "0.0.0.0";
 pub const DEFAULT_RECEIVER_PORT: u16 = 57_421;
 pub const EXPECTED_SAMPLE_RATE_HZ: u16 = 60;
 pub const MAX_DATAGRAMS_PER_SECOND: u32 = 240;
@@ -585,6 +585,16 @@ mod tests {
 
         assert!(!limiter.allow(start + Duration::from_millis(999)));
         assert!(limiter.allow(start + Duration::from_secs(1) + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn udp_receiver_default_bind_addr_listens_on_all_ipv4_interfaces() {
+        let config = UdpReceiverConfig::default();
+
+        assert_eq!(
+            config.bind_addr,
+            "0.0.0.0:57421".parse().expect("bind addr")
+        );
     }
 
     #[tokio::test]

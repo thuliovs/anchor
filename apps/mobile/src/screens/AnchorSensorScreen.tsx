@@ -5,6 +5,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   useColorScheme,
   View,
 } from 'react-native';
@@ -15,9 +16,11 @@ import {
   type MotionCaptureSnapshot,
   type MotionCaptureStatus,
 } from '../motion/MotionCaptureController';
+import { validateUdpDestination } from '../motion/udpDestination';
 
 const POSITIONING_INSTRUCTION = 'Posicione o telefone deitado, tela para cima, em retrato, com a borda superior apontando para a frente do veiculo.';
-const LOCAL_WARNING = 'Diagnostico local - nenhum dado esta sendo enviado';
+const UDP_WARNING = 'UDP nao confirma se o computador recebeu os dados';
+const DEFAULT_PORT = '57421';
 
 export function AnchorSensorScreen({
   controller: providedController,
@@ -34,6 +37,8 @@ export function AnchorSensorScreen({
 
   const controller = controllerRef.current;
   const [snapshot, setSnapshot] = React.useState<MotionCaptureSnapshot>(controller.getSnapshot());
+  const [hostInput, setHostInput] = React.useState('');
+  const [portInput, setPortInput] = React.useState(DEFAULT_PORT);
 
   React.useEffect(() => {
     const unsubscribe = controller.subscribe(setSnapshot);
@@ -49,9 +54,18 @@ export function AnchorSensorScreen({
     || snapshot.status === 'active'
     || snapshot.status === 'stale';
   const isCheckingSensors = snapshot.status === 'checking_sensors';
-  const isBusy = isCheckingSensors || snapshot.status === 'starting';
+  const isBusy = snapshot.status === 'starting';
+  const parsedPort = parsePortInput(portInput);
+  const destinationValidation = validateUdpDestination(hostInput, parsedPort ?? Number.NaN);
+  const sensorsReady = Boolean(
+    snapshot.availability?.linearAcceleration
+      && snapshot.availability.gravity
+      && snapshot.availability.gyroscope,
+  );
+  const loopbackWarning = destinationValidation.loopbackWarning;
   const isPrimaryDisabled = snapshot.status === 'unsupported'
-    || (!isCapturing && isCheckingSensors);
+    || (!isCapturing && (isCheckingSensors || !sensorsReady || !destinationValidation.ok));
+  const fieldsDisabled = snapshot.status === 'starting' || isCapturing;
 
   function handlePrimaryAction() {
     if (isCapturing) {
@@ -59,7 +73,11 @@ export function AnchorSensorScreen({
       return;
     }
 
-    controller.startCapture().catch(() => undefined);
+    if (!destinationValidation.ok || destinationValidation.destination === null) {
+      return;
+    }
+
+    controller.startCapture(destinationValidation.destination).catch(() => undefined);
   }
 
   return (
@@ -78,6 +96,69 @@ export function AnchorSensorScreen({
               value={availabilitySummary(snapshot)}
               palette={palette}
             />
+            <DataRow label="Transporte" value={transportStatusLabel(snapshot.transportState)} palette={palette} />
+          </InfoCard>
+
+          <InfoCard palette={palette} title="Destino UDP">
+            <Text style={[styles.inputLabel, { color: palette.textMuted }]}>IP do computador</Text>
+            <TextInput
+              accessibilityLabel="IP do computador"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!fieldsDisabled}
+              inputMode="decimal"
+              keyboardType="numbers-and-punctuation"
+              onChangeText={setHostInput}
+              placeholder="192.168.0.10"
+              placeholderTextColor={palette.placeholder}
+              style={[
+                styles.input,
+                fieldsDisabled ? styles.inputDisabled : null,
+                {
+                  backgroundColor: palette.inputBackground,
+                  borderColor: palette.border,
+                  color: palette.text,
+                },
+              ]}
+              value={hostInput}
+            />
+            <Text style={[styles.inputLabel, styles.spacingTop12, { color: palette.textMuted }]}>Porta</Text>
+            <TextInput
+              accessibilityLabel="Porta"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!fieldsDisabled}
+              inputMode="numeric"
+              keyboardType="number-pad"
+              onChangeText={setPortInput}
+              placeholder="57421"
+              placeholderTextColor={palette.placeholder}
+              style={[
+                styles.input,
+                fieldsDisabled ? styles.inputDisabled : null,
+                {
+                  backgroundColor: palette.inputBackground,
+                  borderColor: palette.border,
+                  color: palette.text,
+                },
+              ]}
+              value={portInput}
+            />
+            <DataRow
+              label="Destino atual"
+              value={formatDestination(snapshot.transportDestination)}
+              palette={palette}
+            />
+            {destinationValidation.ok ? null : (
+              <Text style={[styles.bodyText, styles.spacingTop8, { color: palette.error }]}>
+                {destinationValidation.message}
+              </Text>
+            )}
+            {loopbackWarning ? (
+              <Text style={[styles.bodyText, styles.spacingTop8, { color: palette.warning }]}>
+                {loopbackWarning}
+              </Text>
+            ) : null}
           </InfoCard>
 
           <InfoCard palette={palette} title="Posicionamento obrigatorio">
@@ -111,6 +192,39 @@ export function AnchorSensorScreen({
             />
           </InfoCard>
 
+          <InfoCard palette={palette} title="Diagnostico de rede">
+            <DataRow
+              label="Oferecidos"
+              value={String(snapshot.transportMetrics.offeredDatagrams)}
+              palette={palette}
+            />
+            <DataRow
+              label="Enviados ao socket"
+              value={String(snapshot.transportMetrics.sentDatagrams)}
+              palette={palette}
+            />
+            <DataRow
+              label="Descartes backpressure"
+              value={String(snapshot.transportMetrics.droppedBackpressure)}
+              palette={palette}
+            />
+            <DataRow
+              label="Payloads rejeitados"
+              value={String(snapshot.transportMetrics.rejectedPayloads)}
+              palette={palette}
+            />
+            <DataRow
+              label="Erros de envio"
+              value={String(snapshot.transportMetrics.sendErrors)}
+              palette={palette}
+            />
+            <DataRow
+              label="Ultimo erro"
+              value={snapshot.transportMetrics.lastTransportError ?? '--'}
+              palette={palette}
+            />
+          </InfoCard>
+
           <VectorCard
             palette={palette}
             title="Aceleracao linear (m/s²)"
@@ -128,7 +242,10 @@ export function AnchorSensorScreen({
           />
 
           <InfoCard palette={palette} title="Aviso">
-            <Text style={[styles.warningText, { color: palette.warning }]}>{LOCAL_WARNING}</Text>
+            <Text style={[styles.warningText, { color: palette.warning }]}>{UDP_WARNING}</Text>
+            <Text style={[styles.bodyText, styles.spacingTop8, { color: palette.textMuted }]}>
+              Desktop escuta na rede local nesta versao. Nao exponha a porta UDP diretamente a internet.
+            </Text>
             {snapshot.errorMessage ? (
               <Text style={[styles.bodyText, styles.spacingTop8, { color: palette.error }]}>
                 {snapshot.errorMessage}
@@ -253,6 +370,21 @@ function availabilitySummary(snapshot: MotionCaptureSnapshot): string {
   ].join(' | ');
 }
 
+function transportStatusLabel(status: MotionCaptureSnapshot['transportState']): string {
+  switch (status) {
+    case 'idle':
+      return 'parado';
+    case 'opening':
+      return 'abrindo socket';
+    case 'socket_ready':
+      return 'socket pronto';
+    case 'sending':
+      return 'enviando para destino';
+    case 'error':
+      return 'erro de transporte';
+  }
+}
+
 function formatNumber(value: number | undefined): string {
   return typeof value === 'number' ? value.toFixed(4) : '--';
 }
@@ -269,6 +401,19 @@ function formatAge(value: number | null): string {
   return typeof value === 'number' ? `${value} ms` : '--';
 }
 
+function formatDestination(value: MotionCaptureSnapshot['transportDestination']): string {
+  return value ? `${value.host}:${value.port}` : '--';
+}
+
+function parsePortInput(value: string): number | null {
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+
+  const port = Number(value);
+  return Number.isInteger(port) ? port : null;
+}
+
 type Palette = {
   background: string;
   card: string;
@@ -277,6 +422,8 @@ type Palette = {
   textMuted: string;
   warning: string;
   error: string;
+  inputBackground: string;
+  placeholder: string;
   button: string;
   buttonText: string;
   buttonDisabled: string;
@@ -291,6 +438,8 @@ const lightPalette: Palette = {
   textMuted: '#475467',
   warning: '#b54708',
   error: '#b42318',
+  inputBackground: '#ffffff',
+  placeholder: '#98a2b3',
   button: '#155eef',
   buttonText: '#ffffff',
   buttonDisabled: '#98a2b3',
@@ -305,6 +454,8 @@ const darkPalette: Palette = {
   textMuted: '#cbd5e1',
   warning: '#fdba74',
   error: '#fda29b',
+  inputBackground: '#0f172a',
+  placeholder: '#64748b',
   button: '#3b82f6',
   buttonText: '#eff6ff',
   buttonDisabled: '#475467',
@@ -342,12 +493,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  input: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 16,
+  },
+  inputDisabled: {
+    opacity: 0.7,
+  },
   warningText: {
     fontSize: 15,
     fontWeight: '700',
   },
   spacingTop8: {
     marginTop: 8,
+  },
+  spacingTop12: {
+    marginTop: 12,
   },
   row: {
     minHeight: 28,

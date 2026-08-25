@@ -1,97 +1,53 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Anchor Mobile
 
-# Getting Started
+Captura sensores Android reais, converte frames nativos em `MotionSampleV1`, serializa JSON UTF-8 e envia um datagrama UDP por amostra para o desktop Anchor.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## Escopo atual
 
-## Step 1: Start Metro
+- Android apenas;
+- destino IPv4 manual;
+- porta padrao `57421`;
+- um `MotionSampleV1` completo por datagrama;
+- fila sequencial latest-wins com backpressure controlado;
+- sem descoberta automatica;
+- sem persistencia de IP/porta;
+- sem ACK, autenticacao ou criptografia.
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## Tela de diagnostico
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+A tela mostra:
 
-```sh
-# Using npm
-npm start
+- disponibilidade dos sensores obrigatorios;
+- IP do computador e porta;
+- estado do transporte UDP;
+- destino atualmente usado;
+- `sessionId`, `sequence`, idade da ultima amostra e taxa observada;
+- datagramas oferecidos, enviados ao socket, descartes por backpressure, payloads rejeitados, erros de envio e ultimo erro.
 
-# OR using Yarn
-yarn start
-```
+O app nao afirma confirmacao de recebimento. `UDP nao confirma se o computador recebeu os dados` aparece explicitamente na tela.
 
-## Step 2: Build and run your app
+## Como executar o fluxo completo
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+1. Descubra manualmente o IPv4 LAN do computador.
+2. Inicie o desktop Anchor.
+3. Confirme nos logs do desktop que o receptor escuta em `0.0.0.0:57421`.
+4. Instale e abra o APK Android.
+5. No celular, informe o IPv4 do computador e a porta `57421`.
+6. Inicie o streaming.
+7. No desktop, confirme:
+   - sender correspondente ao celular;
+   - mesma `sessionId` do mobile;
+   - `sequence` crescente;
+   - taxa proxima de `60 Hz`;
+   - `received` e `accepted` crescendo.
+8. Pare no celular.
+9. Confirme no desktop a transicao para `stale` e depois `disconnected`.
+10. Inicie novamente no celular e confirme nova `sessionId`.
 
-### Android
+## Observacoes importantes
 
-```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
-```
-
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
-
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+- celular e computador devem estar na mesma rede Wi-Fi;
+- a porta UDP `57421` precisa estar liberada no firewall local quando aplicavel;
+- `127.0.0.1` no celular aponta para o proprio celular, nao para o computador;
+- esta fase nao implementa ACK, autenticacao nem criptografia;
+- nao exponha a porta UDP diretamente a internet.
