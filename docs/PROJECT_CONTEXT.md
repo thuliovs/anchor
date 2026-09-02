@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 25 de agosto de 2026  
-> **Estado:** primeira fatia vertical física Android → Wi-Fi/UDP → desktop validada em hardware real  
+> **Snapshot de referência:** 2 de setembro de 2026
+> **Estado:** plataforma de diagnóstico validada em hardware real; variante Android standalone interna automatizada, construída, instalada e validada fisicamente sem Metro e sem `adb reverse`
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -215,6 +215,8 @@ O destino é informado manualmente e não é persistido.
 
 `apps/mobile/metro.config.js` observa a raiz do monorepo e os `node_modules` mobile/raiz para resolver os links simbólicos do pnpm e o pacote `@anchor/protocol`.
 
+O workspace `anchor-mobile` também declara `hermes-compiler@0.14.0` diretamente para expor um caminho estável em `apps/mobile/node_modules/hermes-compiler/hermesc/%OS-BIN%/hermesc`, compatível com a resolução esperada pelo plugin Gradle do React Native em ambiente pnpm.
+
 O APK debug atual não contém um bundle JavaScript standalone. Para desenvolvimento físico:
 
 ```bash
@@ -223,6 +225,18 @@ adb reverse tcp:8081 tcp:8081
 ```
 
 O Metro precisa continuar aberto. O `adb reverse` é usado apenas pelo bundle de desenvolvimento; os datagramas do Anchor continuam seguindo por UDP/Wi-Fi até o IPv4 LAN informado na tela.
+
+Além do debug, agora existe uma variante Android interna `standalone` que:
+
+- é `non-debuggable`;
+- incorpora bundle JavaScript e Hermes no APK;
+- usa `applicationId` final `com.anchormobile.standalone` para coexistir com `com.anchormobile`;
+- usa `versionNameSuffix` `-standalone` e rótulo de aplicação distinto;
+- usa a debug keystore apenas para testes internos.
+
+Essa variante não substitui um futuro `release` de distribuição e não deve ser tratada como artefato de produção.
+
+Nesta data, a implementação automatizada da variante standalone existe, o APK foi construído, inspecionado, instalado e validado fisicamente. O app `standalone` abriu sem Metro e sem `adb reverse`, coexistiu com o app debug por causa do `applicationIdSuffix`, e a comunicação Android → Wi-Fi → desktop funcionou no fluxo físico completo da fatia A1.
 
 ## 8. Aplicação desktop
 
@@ -274,7 +288,7 @@ O backend publica a última amostra aceita no evento `anchor-motion-sample-v1`. 
 
 A visualização atual move um marcador diretamente com `linearAccelerationMps2.x/y`. Ela não integra posição, não estima orientação e não representa ainda o horizonte artificial final.
 
-Há uma inconsistência visual conhecida: a UI mostra `Receptor UDP local (127.0.0.1:57421)`, embora o receptor real faça bind em `0.0.0.0:57421` e aceite a LAN. O texto deve ser corrigido; o transporte real não está limitado ao loopback.
+O frontend de diagnóstico mostra `Receptor UDP (todas as interfaces IPv4, porta 57421)`, coerente com o bind real em `0.0.0.0:57421`.
 
 ## 9. Simulador de movimento
 
@@ -324,6 +338,23 @@ Isso comprova, para esse ambiente, o funcionamento de sensores → módulos nati
 
 O valor de 7 ms é a idade local da última amostra quando o snapshot foi lido. Ele não mede sozinho a latência ponta a ponta entre clocks dos dois dispositivos.
 
+Em 2 de setembro de 2026, a fatia A1 também foi validada fisicamente com o APK Android `standalone`, sem Metro e sem `adb reverse`.
+
+### Evidência observada na validação standalone
+
+- o APK `standalone` foi instalado e abriu sem erro de bundle, sem ecrã vermelho e sem tentativa de dependência do Metro;
+- o `adb reverse` para a porta `8081` não foi usado durante o ensaio;
+- a comunicação Android → Wi-Fi → desktop funcionou no fluxo físico completo;
+- checklist físico da fatia A1 concluído pelo usuário sem erros;
+- taxa aproximada observada no Android: `60,2 Hz`;
+- sensores linear, gravity e gyro: disponíveis;
+- mais de `1.300` pacotes enviados;
+- zero descartes por backpressure;
+- zero payloads rejeitados;
+- zero erros de envio.
+
+Isso comprova, para esse ambiente, que a variante Android `standalone` interna abre e transmite corretamente sem Metro e sem `adb reverse`, preservando o fluxo físico Android → Wi-Fi → desktop.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -367,18 +398,20 @@ adb install -r apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
 Bundle Metro de integração:
 
 ```bash
-pnpm --filter anchor-mobile exec react-native bundle \
-  --platform android \
-  --dev true \
-  --entry-file index.js \
-  --bundle-output /tmp/anchor-mobile-index.android.bundle \
-  --assets-dest /tmp/anchor-mobile-assets \
-  --reset-cache
+pnpm verify:mobile:bundle
+```
+
+Build Android standalone interna:
+
+```bash
+pnpm build:mobile:standalone
 ```
 
 Validações principais:
 
 ```bash
+pnpm test:desktop
+pnpm test:mobile:standalone-scripts
 pnpm typecheck
 pnpm --filter anchor-mobile test -- --runInBand
 pnpm --filter anchor-mobile lint
@@ -400,7 +433,9 @@ cd apps/mobile/android
 ./gradlew :app:generateCodegenArtifactsFromSchema
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleDebug
+./gradlew :app:assembleStandalone
 ./gradlew :app:lintDebug
+./gradlew :app:lintStandalone
 ```
 
 ## 13. O que ainda não existe
@@ -419,7 +454,6 @@ cd apps/mobile/android
 - reconexão automática;
 - transporte USB de dados do produto;
 - app iOS;
-- APK standalone/release validado sem Metro;
 - empacotamento e validação Windows;
 - autostart, configuração completa do tray e gestão de firewall;
 - estudos em veículo e validação de eficácia contra cinetose.
@@ -458,10 +492,12 @@ O objetivo inclui Windows e Linux, mas a validação física atual cobre Android
 
 ### Fase A — Fechar a plataforma de diagnóstico
 
+Concluída em 2 de setembro de 2026.
+
 1. Corrigir o rótulo de entrada do desktop para refletir `0.0.0.0:57421`/todas as interfaces IPv4.
 2. Criar um APK standalone de teste que não dependa do Metro.
 3. Transformar o bundle Metro real em uma verificação repetível do projeto.
-4. Formalizar um checklist de teste físico, incluindo start, stop, background, retorno, nova sessão e perda de rede.
+4. Formalizar e executar um checklist de teste físico, incluindo start, stop, background, retorno, nova sessão e perda de rede.
 
 ### Fase B — Dados e modelo de movimento
 

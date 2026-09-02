@@ -54,6 +54,10 @@ O estado em memoria mantem:
 - instante local da ultima recepcao valida;
 - metricas acumuladas.
 
+## Rotulo de diagnostico
+
+O frontend mostra `Receptor UDP (todas as interfaces IPv4, porta 57421)`, coerente com o bind real em `0.0.0.0:57421`.
+
 ## Status do stream
 
 - `active`: recebeu amostra valida nos ultimos `250 ms`;
@@ -89,6 +93,20 @@ Os logs fazem resumo dessas metricas no maximo uma vez por segundo. Nao ha log p
 - UDP nesta versao nao possui criptografia;
 - use o firewall do sistema para restringir a porta `57421` a LAN quando necessario;
 - nao exponha a porta diretamente a internet.
+
+## Verificacoes relacionadas
+
+```bash
+pnpm test:desktop
+pnpm test:mobile:standalone-scripts
+pnpm verify:mobile:bundle
+pnpm build:mobile:standalone
+```
+
+- `pnpm test:desktop` cobre os testes TypeScript do frontend desktop, incluindo o rotulo do receptor.
+- `pnpm test:mobile:standalone-scripts` cobre a selecao de JDK e build-tools usada pelos scripts standalone.
+- `pnpm verify:mobile:bundle` valida a resolucao Metro real do monorepo.
+- `pnpm build:mobile:standalone` produz o APK interno Android sem depender do Metro.
 
 ## Validacao manual do fluxo Android -> desktop
 

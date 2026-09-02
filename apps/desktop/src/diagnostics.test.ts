@@ -8,6 +8,7 @@ import {
   formatSampleNumber,
   getDisplayedSample,
   mapAccelerationToOffset,
+  RECEIVER_SOURCE_LABEL,
 } from "./diagnostics";
 
 function sample(overrides?: Partial<MotionSampleV1>): MotionSampleV1 {
@@ -67,4 +68,12 @@ test("getDisplayedSample preserves the last sample while disconnected", () => {
     getDisplayedSample("disconnected", null, lastSnapshotSample),
     lastSnapshotSample,
   );
+});
+
+test("receiver source label describes all IPv4 interfaces instead of loopback", () => {
+  assert.equal(
+    RECEIVER_SOURCE_LABEL,
+    "Receptor UDP (todas as interfaces IPv4, porta 57421)",
+  );
+  assert.equal(RECEIVER_SOURCE_LABEL.includes("127.0.0.1"), false);
 });

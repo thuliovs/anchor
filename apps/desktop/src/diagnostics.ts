@@ -1,7 +1,7 @@
 import type { MotionSampleV1 } from "@anchor/protocol";
 
 export const MOTION_SAMPLE_EVENT = "anchor-motion-sample-v1";
-export const RECEIVER_SOURCE_LABEL = "Receptor UDP local (127.0.0.1:57421)";
+export const RECEIVER_SOURCE_LABEL = "Receptor UDP (todas as interfaces IPv4, porta 57421)";
 export const SNAPSHOT_POLL_INTERVAL_MS = 250;
 export const VISUAL_RANGE_MPS2 = 12;
 

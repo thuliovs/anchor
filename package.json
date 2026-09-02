@@ -8,12 +8,16 @@
     "dev:mobile": "pnpm --filter anchor-mobile start",
     "build:desktop": "pnpm --filter anchor-desktop tauri build",
     "build:desktop:frontend": "pnpm --filter anchor-desktop build",
+    "build:mobile:standalone": "node ./scripts/mobile/build-standalone.cjs",
+    "test:desktop": "pnpm --filter anchor-desktop test",
+    "test:mobile:standalone-scripts": "node --test \"scripts/mobile/standalone-utils.test.cjs\"",
     "typecheck": "pnpm -r --if-present run typecheck",
     "protocol:typecheck": "pnpm --filter @anchor/protocol typecheck",
     "protocol:test": "pnpm --filter @anchor/protocol test",
     "protocol:test:rust": "cargo test protocol --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "test:simulator": "pnpm --filter @anchor/motion-simulator test",
-    "test:receiver": "cargo test receiver --manifest-path apps/desktop/src-tauri/Cargo.toml"
+    "test:receiver": "cargo test receiver --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "verify:mobile:bundle": "node ./scripts/mobile/verify-bundle.cjs"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

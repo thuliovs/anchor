@@ -121,6 +121,9 @@ importers:
       eslint:
         specifier: ^8.19.0
         version: 8.57.1
+      hermes-compiler:
+        specifier: 0.14.0
+        version: 0.14.0
       jest:
         specifier: ^29.6.3
         version: 29.7.0(@types/node@24.13.3)
