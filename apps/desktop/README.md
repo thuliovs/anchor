@@ -9,6 +9,7 @@ O desktop inicia um receptor UDP em `0.0.0.0:57421`, aceita trafego em todas as 
 Esta etapa ainda nao implementa:
 
 - overlay visual;
+- calibracao/zero;
 - autenticacao;
 - criptografia.
 
@@ -31,6 +32,15 @@ Execucao por tempo limitado:
 ```bash
 pnpm dev:simulator -- --duration 5 --pattern sine
 ```
+
+Gravacao headless de dataset controlado:
+
+```bash
+pnpm motion:record -- --scenario stationary --duration-seconds 15
+pnpm motion:analyze -- artifacts/motion-datasets/<arquivo>.ndjson
+```
+
+O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
 
 ## Endereco e porta padrao
 

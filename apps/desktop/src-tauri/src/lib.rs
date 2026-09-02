@@ -11,6 +11,7 @@ use tauri::{
 };
 use tokio::sync::watch;
 
+pub mod dataset;
 pub mod protocol;
 pub mod receiver;
 

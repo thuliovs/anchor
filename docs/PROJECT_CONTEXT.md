@@ -128,13 +128,13 @@ O JSON Schema em `packages/protocol/schema/motion-sample.v1.schema.json` é a es
 
 `Vector3` contém exatamente `x`, `y` e `z`, todos numéricos e finitos. Campos desconhecidos são rejeitados.
 
-### Referencial adotado
+### Referencial assumido pela convencao de montagem
 
 - X positivo: direita do veículo;
 - Y positivo: frente do veículo;
 - Z positivo: cima.
 
-O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`.
+O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Esse referencial ainda não foi calibrado; ele é apenas a hipótese operacional atual de montagem. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 introduz datasets controlados para confirmar empiricamente os sinais reais dos eixos antes da futura operação de zero/calibração.
 
 ### Regras de transporte
 
@@ -355,6 +355,61 @@ Em 2 de setembro de 2026, a fatia A1 também foi validada fisicamente com o APK 
 
 Isso comprova, para esse ambiente, que a variante Android `standalone` interna abre e transmite corretamente sem Metro e sem `adb reverse`, preservando o fluxo físico Android → Wi-Fi → desktop.
 
+### Evidência observada na validação B1
+
+Em 2 de setembro de 2026, o checklist físico da fatia B1 foi executado e aprovado com Android real, Linux e Wi-Fi local, usando nove datasets controlados gravados pelo recorder headless no desktop.
+
+Capturas selecionadas:
+
+- `20260902T221420Z-stationary.ndjson`;
+- `20260902T221919Z-roll_right.ndjson`;
+- `20260902T221937Z-roll_left.ndjson`;
+- `20260902T222109Z-pitch_front_down.ndjson`;
+- `20260902T222126Z-pitch_front_up.ndjson`;
+- `20260902T222326Z-yaw_clockwise.ndjson`;
+- `20260902T222358Z-yaw_counterclockwise.ndjson`;
+- `20260902T222523Z-linear_forward.ndjson`;
+- `20260902T222735Z-linear_backward.ndjson`.
+
+Resumo consolidado:
+
+- duração controlada total: `91 s`;
+- amostras gravadas: `5.461`;
+- todos os datasets completos, sem warnings e com exatamente uma sessão cada;
+- taxas observadas próximas de `60 Hz`;
+- `recorderDroppedSamples = 0` em todos os datasets;
+- apenas duas amostras ausentes no total:
+  - uma em `roll_right`;
+  - uma em `roll_left`;
+- nenhuma lacuna nos outros sete datasets.
+
+Sinais observados:
+
+- parado:
+  - `gravityMps2.z` médio `-9.812 m/s²`;
+  - magnitude média da gravidade `9.860 m/s²`;
+  - aceleração linear e velocidade angular médias próximas de zero.
+- roll para a direita:
+  - `gravityMps2.x` chegou a `+8.552 m/s²`.
+- roll para a esquerda:
+  - `gravityMps2.x` chegou a `-9.697 m/s²`.
+- pitch com borda superior para baixo:
+  - `gravityMps2.y` chegou a `+7.519 m/s²`.
+- pitch com borda superior para cima:
+  - `gravityMps2.y` chegou a `-9.290 m/s²`.
+- yaw horário:
+  - primeiro movimento significativo em `angularVelocityRadS.z` negativo.
+- yaw anti-horário:
+  - primeiro movimento significativo em `angularVelocityRadS.z` positivo.
+- deslocamento para frente:
+  - aceleração principal inicial em Y positiva, chegando a `+1.687 m/s²`.
+- deslocamento para trás:
+  - aceleração principal inicial em Y negativa, chegando a `-1.578 m/s²`.
+
+Os sinais opostos posteriores nas capturas de yaw e deslocamento correspondem à frenagem e ao retorno à posição inicial.
+
+Essa validação sustenta a hipótese operacional atual dos eixos sob a convenção de montagem assumida, mas não constitui um referencial calibrado. Calibração/zero, filtros, fusão, correção de movimento e overlay continuam fora da B1.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -470,7 +525,7 @@ Uma visualização atrasada, instável ou com movimento errado pode ser inútil 
 
 ### Referencial e montagem
 
-O referencial atual depende de uma orientação física obrigatória. Na prática, veículos, suportes e usuários variarão; será necessário calibrar, detectar orientação ou permitir perfis de montagem.
+O referencial atual depende de uma orientação física obrigatória e ainda não calibrada. Na prática, veículos, suportes e usuários variarão; será necessário calibrar, detectar orientação ou permitir perfis de montagem. A fatia B1 já mediu datasets controlados e sustentou a hipótese operacional atual de eixos e sinais sob a convenção de montagem assumida, mas isso não substitui uma futura operação de calibração/zero.
 
 ### Modelo visual
 
@@ -501,12 +556,13 @@ Concluída em 2 de setembro de 2026.
 
 ### Fase B — Dados e modelo de movimento
 
-1. Registrar datasets controlados: parado, inclinações, rotações, aceleração/frenagem e curvas.
-2. Verificar e documentar eixos e sinais em cada movimento.
-3. Definir uma operação de calibração/zero.
-4. Comparar filtro complementar, filtros passa-baixa e outras abordagens de fusão.
-5. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
-6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
+2. Definir uma operação de calibração/zero.
+3. Comparar filtro complementar, filtros passa-baixa e outras abordagens de fusão.
+4. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
+5. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+
+Somente a fatia B1 está concluída. A Fase B inteira ainda permanece em aberto.
 
 ### Fase C — Primeiro overlay experimental
 

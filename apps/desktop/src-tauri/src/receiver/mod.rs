@@ -17,6 +17,17 @@ pub const SESSION_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub type SharedReceiverState = Arc<Mutex<ReceiverState>>;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcceptedSampleEvent {
+    pub sample: MotionSampleV1,
+    pub sender: SocketAddr,
+    pub received_at: Instant,
+}
+
+pub trait AcceptedSampleSink: Send + Sync {
+    fn try_publish(&self, event: AcceptedSampleEvent);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamStatus {
     Active,

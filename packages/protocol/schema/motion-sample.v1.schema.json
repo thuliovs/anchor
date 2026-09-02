@@ -3,7 +3,7 @@
   "$id": "https://anchor.dev/schema/motion-sample.v1.schema.json",
   "title": "MotionSampleV1",
   "type": "object",
-  "description": "Anchor motion protocol v1 sample. All vectors use the calibrated vehicle frame: X positive = right, Y positive = forward, Z positive = up. sessionElapsedUs is a monotonic session-relative clock in microseconds, not a Unix timestamp or wall-clock time. sessionId is an opaque identifier and is not authentication.",
+  "description": "Anchor motion protocol v1 sample. All vectors use the frame assumed by the current mounting convention: phone lying flat, screen up, portrait orientation, top edge pointing toward vehicle front. In that assumed frame, X positive = right, Y positive = forward, Z positive = up. sessionElapsedUs is a monotonic session-relative clock in microseconds, not a Unix timestamp or wall-clock time. sessionId is an opaque identifier and is not authentication. This frame is not yet calibrated; controlled datasets are used to validate the axis interpretation before future zero/calibration work.",
   "additionalProperties": false,
   "required": [
     "protocolVersion",
@@ -18,7 +18,7 @@
   "$defs": {
     "Vector3": {
       "type": "object",
-      "description": "Three-axis vector in the calibrated vehicle frame: X positive = right, Y positive = forward, Z positive = up.",
+      "description": "Three-axis vector in the frame assumed by the current mounting convention: X positive = right, Y positive = forward, Z positive = up.",
       "additionalProperties": false,
       "required": ["x", "y", "z"],
       "properties": {
@@ -74,19 +74,19 @@
               "type": "number",
               "minimum": -200,
               "maximum": 200,
-              "description": "Linear acceleration along vehicle-right axis in m/s^2."
+              "description": "Linear acceleration along the assumed right axis in m/s^2."
             },
             "y": {
               "type": "number",
               "minimum": -200,
               "maximum": 200,
-              "description": "Linear acceleration along vehicle-forward axis in m/s^2. Forward acceleration has y > 0 and braking has y < 0."
+              "description": "Linear acceleration along the assumed forward axis in m/s^2. Forward acceleration is hypothesized to have y > 0 and braking y < 0 under the current mounting convention."
             },
             "z": {
               "type": "number",
               "minimum": -200,
               "maximum": 200,
-              "description": "Linear acceleration along vehicle-up axis in m/s^2."
+              "description": "Linear acceleration along the assumed up axis in m/s^2."
             }
           }
         }
@@ -99,25 +99,25 @@
         },
         {
           "type": "object",
-          "description": "Gravity vector in meters per second squared. When stationary, gravity should be approximately z = -9.80665.",
+          "description": "Gravity vector in meters per second squared. Under the current mounting convention and while stationary, gravity is expected to be approximately z = -9.80665.",
           "properties": {
             "x": {
               "type": "number",
               "minimum": -20,
               "maximum": 20,
-              "description": "Gravity along vehicle-right axis in m/s^2."
+              "description": "Gravity along the assumed right axis in m/s^2."
             },
             "y": {
               "type": "number",
               "minimum": -20,
               "maximum": 20,
-              "description": "Gravity along vehicle-forward axis in m/s^2."
+              "description": "Gravity along the assumed forward axis in m/s^2."
             },
             "z": {
               "type": "number",
               "minimum": -20,
               "maximum": 20,
-              "description": "Gravity along vehicle-up axis in m/s^2. When stationary, this should be approximately -9.80665."
+              "description": "Gravity along the assumed up axis in m/s^2. Under the current mounting convention and while stationary, this is expected to be approximately -9.80665."
             }
           }
         }
@@ -136,19 +136,19 @@
               "type": "number",
               "minimum": -100,
               "maximum": 100,
-              "description": "Angular velocity around vehicle-right axis in rad/s."
+              "description": "Angular velocity around the assumed right axis in rad/s."
             },
             "y": {
               "type": "number",
               "minimum": -100,
               "maximum": 100,
-              "description": "Angular velocity around vehicle-forward axis in rad/s."
+              "description": "Angular velocity around the assumed forward axis in rad/s."
             },
             "z": {
               "type": "number",
               "minimum": -100,
               "maximum": 100,
-              "description": "Angular velocity around vehicle-up axis in rad/s."
+              "description": "Angular velocity around the assumed up axis in rad/s."
             }
           }
         }

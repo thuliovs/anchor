@@ -1,9 +1,9 @@
 use super::{
-    FixedWindowRateLimiter, SampleAcceptance, SharedReceiverState, DEFAULT_RECEIVER_PORT,
-    EXPECTED_SAMPLE_RATE_HZ, MAX_DATAGRAMS_PER_SECOND,
+    AcceptedSampleEvent, AcceptedSampleSink, FixedWindowRateLimiter, SampleAcceptance,
+    SharedReceiverState, DEFAULT_RECEIVER_PORT, EXPECTED_SAMPLE_RATE_HZ, MAX_DATAGRAMS_PER_SECOND,
 };
 use crate::protocol::{parse_validated_datagram, ProtocolParseError, MAX_DATAGRAM_BYTES};
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     net::UdpSocket,
     sync::{oneshot, watch},
@@ -11,17 +11,21 @@ use tokio::{
     time::{interval_at, Instant as TokioInstant, MissedTickBehavior},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct UdpReceiverConfig {
     pub bind_addr: SocketAddr,
+    pub max_datagrams_per_second: u32,
     pub metrics_log_interval: Duration,
+    pub accepted_sample_sink: Option<Arc<dyn AcceptedSampleSink>>,
 }
 
 impl Default for UdpReceiverConfig {
     fn default() -> Self {
         Self {
             bind_addr: SocketAddr::from(([0, 0, 0, 0], DEFAULT_RECEIVER_PORT)),
+            max_datagrams_per_second: MAX_DATAGRAMS_PER_SECOND,
             metrics_log_interval: Duration::from_secs(1),
+            accepted_sample_sink: None,
         }
     }
 }
@@ -62,9 +66,10 @@ pub async fn start_udp_receiver(
     );
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let accepted_sample_sink = config.accepted_sample_sink.clone();
     let join_handle = tokio::spawn(async move {
         let mut limiter =
-            FixedWindowRateLimiter::new(MAX_DATAGRAMS_PER_SECOND, Duration::from_secs(1));
+            FixedWindowRateLimiter::new(config.max_datagrams_per_second, Duration::from_secs(1));
         let mut metrics_tick = interval_at(
             TokioInstant::now() + config.metrics_log_interval,
             config.metrics_log_interval,
@@ -134,6 +139,13 @@ pub async fn start_udp_receiver(
 
                             if let Some((acceptance, published_sample)) = outcome {
                                 if let Some(sample) = published_sample {
+                                    if let Some(sink) = accepted_sample_sink.as_ref() {
+                                        sink.try_publish(AcceptedSampleEvent {
+                                            sample: sample.clone(),
+                                            sender: sender_addr,
+                                            received_at: now,
+                                        });
+                                    }
                                     let _ = latest_sample_tx.send(Some(sample));
                                 }
 

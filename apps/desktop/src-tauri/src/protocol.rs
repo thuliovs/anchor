@@ -137,11 +137,11 @@ impl MotionSampleV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Vector3 {
-    /// Vehicle-calibrated coordinate system: X+ = right, Y+ = forward, Z+ = up.
+    /// Axis in the frame assumed by the current mounting convention: X+ = right.
     pub x: f64,
-    /// Vehicle-calibrated coordinate system: X+ = right, Y+ = forward, Z+ = up.
+    /// Axis in the frame assumed by the current mounting convention: Y+ = forward.
     pub y: f64,
-    /// Vehicle-calibrated coordinate system: X+ = right, Y+ = forward, Z+ = up.
+    /// Axis in the frame assumed by the current mounting convention: Z+ = up.
     pub z: f64,
 }
 

@@ -4,11 +4,20 @@ Contrato versionado e independente de linguagem para amostras de movimento do An
 
 ## Sistema de coordenadas
 
-Todos os vetores usam o referencial calibrado do veiculo:
+Todos os vetores usam o referencial assumido pela convencao de montagem atual:
 
 - X positivo = direita
 - Y positivo = frente
 - Z positivo = cima
+
+A convencao fisica obrigatoria nesta fase e:
+
+- telefone deitado;
+- tela para cima;
+- modo retrato;
+- borda superior apontando para a frente do veiculo.
+
+Esse referencial ainda nao foi calibrado nem verificado empiricamente para todos os cenarios. Os datasets da fase B1 existem justamente para confirmar os sinais reais dos eixos antes da futura operacao de zero/calibracao.
 
 ## Unidades
 
