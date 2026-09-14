@@ -229,6 +229,13 @@ pub struct ScalarStats {
     pub stddev: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedDataset {
+    pub metadata: DatasetMetadataRecord,
+    pub samples: Vec<DatasetSampleRecord>,
+    pub summary: Option<DatasetSummaryRecord>,
+}
+
 #[derive(Debug)]
 pub enum DatasetAnalysisError {
     Io(io::Error),
@@ -601,6 +608,18 @@ pub fn analyze_dataset_file(path: &Path) -> Result<DatasetAnalysis, DatasetAnaly
 }
 
 pub fn analyze_dataset_str(contents: &str) -> Result<DatasetAnalysis, DatasetAnalysisError> {
+    let validated = load_validated_dataset_str(contents)?;
+    build_analysis(validated.metadata, validated.samples, validated.summary)
+}
+
+pub fn load_validated_dataset_file(path: &Path) -> Result<ValidatedDataset, DatasetAnalysisError> {
+    let contents = fs::read_to_string(path)?;
+    load_validated_dataset_str(&contents)
+}
+
+pub fn load_validated_dataset_str(
+    contents: &str,
+) -> Result<ValidatedDataset, DatasetAnalysisError> {
     let mut metadata: Option<DatasetMetadataRecord> = None;
     let mut samples = Vec::new();
     let mut summary: Option<(usize, DatasetSummaryRecord)> = None;
@@ -794,7 +813,11 @@ pub fn analyze_dataset_str(contents: &str) -> Result<DatasetAnalysis, DatasetAna
 
     validate_summary(summary.as_ref(), samples.len())?;
 
-    build_analysis(metadata, samples, summary.map(|(_, record)| record))
+    Ok(ValidatedDataset {
+        metadata,
+        samples,
+        summary: summary.map(|(_, record)| record),
+    })
 }
 
 pub fn format_human_analysis(analysis: &DatasetAnalysis, path: &Path) -> String {

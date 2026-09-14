@@ -1,4 +1,8 @@
 use anchor_desktop_lib::{
+    calibration::{
+        calibrate_dataset_file, default_profile_output_path_for_dataset, format_human_report,
+        write_calibration_profile_file,
+    },
     dataset::{
         analyze_dataset_file, default_dataset_output_path, format_human_analysis,
         start_dataset_recorder, DatasetRecorderConfig, RecordingScenario,
@@ -39,6 +43,11 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             notes,
         } => record_command(scenario, duration_seconds, output_path, bind_addr, notes).await,
         Command::Analyze { path, json } => analyze_command(path, json),
+        Command::Calibrate {
+            path,
+            output_path,
+            json,
+        } => calibrate_command(path, output_path, json),
     }
 }
 
@@ -55,6 +64,11 @@ enum Command {
         path: PathBuf,
         json: bool,
     },
+    Calibrate {
+        path: PathBuf,
+        output_path: Option<PathBuf>,
+        json: bool,
+    },
 }
 
 fn parse_command(args: &[String]) -> Result<Command, String> {
@@ -65,6 +79,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
     match command {
         "record" => parse_record_command(&args[1..]),
         "analyze" => parse_analyze_command(&args[1..]),
+        "calibrate" => parse_calibrate_command(&args[1..]),
         "--help" | "-h" => Err(usage()),
         other => Err(format!("unsupported subcommand: {other}\n\n{}", usage())),
     }
@@ -165,6 +180,54 @@ fn parse_analyze_command(args: &[String]) -> Result<Command, String> {
 
     Ok(Command::Analyze {
         path: path.ok_or_else(|| "analyze requires a dataset path".to_owned())?,
+        json,
+    })
+}
+
+fn parse_calibrate_command(args: &[String]) -> Result<Command, String> {
+    if args.is_empty() {
+        return Err(format!("calibrate requires a dataset path\n\n{}", usage()));
+    }
+
+    let mut path: Option<PathBuf> = None;
+    let mut output_path: Option<PathBuf> = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--" => {
+                index += 1;
+            }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--output" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --output".to_owned())?;
+                output_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!(
+                    "unsupported option for calibrate: {flag}\n\n{}",
+                    usage()
+                ));
+            }
+            value => {
+                if path.is_some() {
+                    return Err("calibrate accepts exactly one dataset path".to_owned());
+                }
+                path = Some(PathBuf::from(value));
+                index += 1;
+            }
+        }
+    }
+
+    Ok(Command::Calibrate {
+        path: path.ok_or_else(|| "calibrate requires a dataset path".to_owned())?,
+        output_path,
         json,
     })
 }
@@ -431,6 +494,42 @@ fn analyze_command(path: PathBuf, json: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn calibrate_command(
+    path: PathBuf,
+    output_path: Option<PathBuf>,
+    json: bool,
+) -> Result<(), String> {
+    let report = calibrate_dataset_file(&path).map_err(|err| match &err {
+        anchor_desktop_lib::calibration::CalibrationError::Dataset(dataset_err) => {
+            if matches!(dataset_err, anchor_desktop_lib::dataset::DatasetAnalysisError::Io(ref io_err) if io_err.kind() == io::ErrorKind::NotFound)
+            {
+                format!("dataset file does not exist: {}", path.display())
+            } else {
+                err.to_string()
+            }
+        }
+        _ => err.to_string(),
+    })?;
+
+    let output_path = output_path.unwrap_or_else(|| default_profile_output_path_for_dataset(&path));
+    write_calibration_profile_file(&output_path, &report.profile).map_err(|err| err.to_string())?;
+
+    if json {
+        let rendered = serde_json::to_string_pretty(&serde_json::json!({
+            "profilePath": output_path,
+            "profile": report.profile,
+            "residuals": report.residuals,
+        }))
+        .map_err(|err| format!("failed to render calibration JSON: {err}"))?;
+        println!("{rendered}");
+    } else {
+        println!("{}", format_human_report(&report, &path));
+        println!("written profile: {}", output_path.display());
+    }
+
+    Ok(())
+}
+
 fn parse_positive_u64(value: &str, name: &str) -> Result<u64, String> {
     let parsed = value
         .parse::<u64>()
@@ -456,6 +555,7 @@ fn usage() -> String {
         "Usage:",
         "  anchor-motion-dataset record --scenario <name> --duration-seconds <seconds> [--output <path>] [--bind <host:port>] [--notes <text>]",
         "  anchor-motion-dataset analyze <file.ndjson> [--json]",
+        "  anchor-motion-dataset calibrate <file.ndjson> [--output <profile.json>] [--json]",
     ]
     .join("\n")
 }

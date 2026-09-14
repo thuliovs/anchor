@@ -36,6 +36,7 @@ lerna-debug.log*
 
 # Motion datasets generated locally by the headless desktop recorder
 artifacts/motion-datasets/
+artifacts/motion-calibrations/
 
 # Android
 **/android/.gradle/

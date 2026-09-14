@@ -19,9 +19,10 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 2. o app cria amostras versionadas a aproximadamente 60 Hz;
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
-5. o frontend Tauri exibe os dados e métricas em tempo real.
+5. o frontend Tauri exibe os dados e métricas em tempo real;
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, ainda sem aplicação ao fluxo ao vivo.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -290,6 +291,44 @@ A visualização atual move um marcador diretamente com `linearAccelerationMps2.
 
 O frontend de diagnóstico mostra `Receptor UDP (todas as interfaces IPv4, porta 57421)`, coerente com o bind real em `0.0.0.0:57421`.
 
+### Calibração offline v1
+
+O desktop agora possui um módulo Rust dedicado em `apps/desktop/src-tauri/src/calibration/` para uma operação offline, determinística e versionada de calibração/zero a partir de datasets `stationary`.
+
+Características da v1:
+
+- calcula a média vetorial da gravidade e uma rotação ativa `deviceToLeveled` que alinha `normalize(meanGravity)` com `(0, 0, -1)`;
+- preserva a magnitude medida da gravidade;
+- estima bias estacionário da aceleração linear e da velocidade angular no frame do dispositivo;
+- grava um perfil JSON estrito com `deny_unknown_fields`;
+- separa `createdAtUtc` como instante de criação do perfil e `sourceStartedAtUtc` como início original da captura;
+- valida um quality gate com limiares diagnósticos iniciais;
+- reporta resíduos após aplicar a própria transformação ao dataset.
+
+Evidência física offline da B2, usando `artifacts/motion-datasets/20260902T221420Z-stationary.ndjson`:
+
+- `quality.passed: true`;
+- 902 amostras;
+- duração observada de `14.986.690 us`;
+- taxa de origem de `60,0254 Hz`;
+- correção de inclinação de `5,6488°`;
+- gravidade média de `9,8598 m/s²`;
+- RMS linear calibrado de `0,0279031 m/s²`;
+- RMS angular calibrado de `0,00648794 rad/s`;
+- erro angular residual RMS da gravidade de `0,260718°`;
+- `yawCalibrated: false`.
+
+Essa validação física cobre a geração offline do perfil, suas transformações estáticas e os resíduos reportados. Ela não transforma o resultado em referencial completo do veículo, porque yaw continua indeterminado.
+
+Limitações deliberadas:
+
+- `yawCalibrated` é sempre `false`;
+- não usa magnetômetro;
+- não infere direção por movimento;
+- produz um `leveled mounting frame`, não um referencial completo do veículo;
+- não distingue inclinação do suporte, do veículo e do piso/estrada no instante do zero;
+- ainda não aplica o perfil ao receptor ao vivo nem à UI.
+
 ## 9. Simulador de movimento
 
 `@anchor/motion-simulator` permite validar protocolo e receptor sem celular.
@@ -462,6 +501,13 @@ Build Android standalone interna:
 pnpm build:mobile:standalone
 ```
 
+Calibração offline:
+
+```bash
+pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson
+pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson --output artifacts/motion-calibrations/<profile>.json --json
+```
+
 Validações principais:
 
 ```bash
@@ -498,7 +544,7 @@ cd apps/mobile/android
 - horizonte artificial/overlay final;
 - janela transparente, always-on-top e click-through;
 - modelo de movimento, orientação ou fusão de sensores destinado ao visual;
-- calibração/zero do posicionamento;
+- aplicação da calibração ao fluxo ao vivo;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
 - medição formal de latência ponta a ponta e jitter;
@@ -525,7 +571,7 @@ Uma visualização atrasada, instável ou com movimento errado pode ser inútil 
 
 ### Referencial e montagem
 
-O referencial atual depende de uma orientação física obrigatória e ainda não calibrada. Na prática, veículos, suportes e usuários variarão; será necessário calibrar, detectar orientação ou permitir perfis de montagem. A fatia B1 já mediu datasets controlados e sustentou a hipótese operacional atual de eixos e sinais sob a convenção de montagem assumida, mas isso não substitui uma futura operação de calibração/zero.
+O referencial atual depende de uma orientação física obrigatória. A fatia B2 implementou e validou fisicamente uma operação offline de calibração/zero que produz um `leveled mounting frame` corrigindo roll e pitch, mas yaw continua indeterminado. Na prática, veículos, suportes e usuários variarão; a aplicação desse perfil ao fluxo ao vivo e futuras estratégias de montagem permanecem trabalhos separados.
 
 ### Modelo visual
 
@@ -557,12 +603,12 @@ Concluída em 2 de setembro de 2026.
 ### Fase B — Dados e modelo de movimento
 
 1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
-2. Definir uma operação de calibração/zero.
+2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
 3. Comparar filtro complementar, filtros passa-baixa e outras abordagens de fusão.
 4. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
 5. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
 
-Somente a fatia B1 está concluída. A Fase B inteira ainda permanece em aberto.
+As fatias B1 e B2 estão concluídas. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de filtros/fusão, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
 
 ### Fase C — Primeiro overlay experimental
 

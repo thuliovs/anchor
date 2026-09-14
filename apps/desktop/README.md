@@ -9,9 +9,10 @@ O desktop inicia um receptor UDP em `0.0.0.0:57421`, aceita trafego em todas as 
 Esta etapa ainda nao implementa:
 
 - overlay visual;
-- calibracao/zero;
 - autenticacao;
 - criptografia.
+
+Esta etapa agora inclui uma calibracao/zero offline v1 a partir de um dataset `stationary`, mas a aplicacao do perfil ao fluxo ao vivo ainda nao existe.
 
 ## Como executar
 
@@ -38,9 +39,32 @@ Gravacao headless de dataset controlado:
 ```bash
 pnpm motion:record -- --scenario stationary --duration-seconds 15
 pnpm motion:analyze -- artifacts/motion-datasets/<arquivo>.ndjson
+pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson
+pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson --output artifacts/motion-calibrations/<perfil>.json --json
 ```
 
 O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
+
+## Calibracao offline v1
+
+A calibracao B2 usa apenas um dataset `stationary` completo e com uma unica sessao para:
+
+- estimar o vetor medio de gravidade no frame do dispositivo;
+- calcular uma rotacao ativa `deviceToLeveled` que alinha `normalize(meanGravity)` com `(0, 0, -1)`;
+- estimar bias estacionario da aceleracao linear e da velocidade angular no frame do dispositivo;
+- gravar um perfil JSON reutilizavel e versionado.
+
+O perfil registra `createdAtUtc` como o instante real da criacao do perfil e preserva o inicio da captura original em `sourceStartedAtUtc`.
+
+Limitacoes deliberadas da v1:
+
+- `yawCalibrated` e sempre `false`;
+- nao usa magnetometro;
+- nao infere direcao por movimento;
+- o resultado e um `leveled mounting frame`, nao um referencial completo do veiculo;
+- a operacao nao distingue inclinacao do suporte, do veiculo e do piso/estrada no instante do zero.
+
+Por enquanto, o perfil serve apenas para operacao offline e testes. O receptor, o analyzer B1, o protocolo e o fluxo standalone existente permanecem inalterados.
 
 ## Endereco e porta padrao
 
@@ -140,6 +164,8 @@ pnpm build:mobile:standalone
 
 ```text
 apps/desktop/src-tauri/src/
+├── calibration/
+│   └── mod.rs
 ├── lib.rs
 ├── main.rs
 ├── protocol.rs
