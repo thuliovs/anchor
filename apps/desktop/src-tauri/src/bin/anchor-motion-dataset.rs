@@ -7,6 +7,9 @@ use anchor_desktop_lib::{
         analyze_dataset_file, default_dataset_output_path, format_human_analysis,
         start_dataset_recorder, DatasetRecorderConfig, RecordingScenario,
     },
+    motion_filtering::{
+        evaluate_dataset_file, evaluate_synthetic_suite, format_human_evaluation, EvaluationConfig,
+    },
     receiver::{
         udp::{start_udp_receiver, UdpReceiverConfig},
         ReceiverMetrics, ReceiverState, SharedReceiverState,
@@ -48,6 +51,21 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             output_path,
             json,
         } => calibrate_command(path, output_path, json),
+        Command::Evaluate {
+            synthetic,
+            dataset_path,
+            profile_path,
+            low_pass_tau_ms,
+            complementary_tau_ms,
+            json,
+        } => evaluate_command(
+            synthetic,
+            dataset_path,
+            profile_path,
+            low_pass_tau_ms,
+            complementary_tau_ms,
+            json,
+        ),
     }
 }
 
@@ -69,6 +87,14 @@ enum Command {
         output_path: Option<PathBuf>,
         json: bool,
     },
+    Evaluate {
+        synthetic: bool,
+        dataset_path: Option<PathBuf>,
+        profile_path: Option<PathBuf>,
+        low_pass_tau_ms: Vec<f64>,
+        complementary_tau_ms: Vec<f64>,
+        json: bool,
+    },
 }
 
 fn parse_command(args: &[String]) -> Result<Command, String> {
@@ -80,9 +106,116 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         "record" => parse_record_command(&args[1..]),
         "analyze" => parse_analyze_command(&args[1..]),
         "calibrate" => parse_calibrate_command(&args[1..]),
+        "evaluate" => parse_evaluate_command(&args[1..]),
         "--help" | "-h" => Err(usage()),
         other => Err(format!("unsupported subcommand: {other}\n\n{}", usage())),
     }
+}
+
+fn parse_evaluate_command(args: &[String]) -> Result<Command, String> {
+    let mut synthetic = false;
+    let mut dataset_path: Option<PathBuf> = None;
+    let mut profile_path: Option<PathBuf> = None;
+    let mut low_pass_tau_ms: Option<Vec<f64>> = None;
+    let mut complementary_tau_ms: Option<Vec<f64>> = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--" => index += 1,
+            "--synthetic" => {
+                if synthetic {
+                    return Err("--synthetic may only be provided once".to_owned());
+                }
+                synthetic = true;
+                index += 1;
+            }
+            "--json" => {
+                if json {
+                    return Err("--json may only be provided once".to_owned());
+                }
+                json = true;
+                index += 1;
+            }
+            "--dataset" => {
+                if dataset_path.is_some() {
+                    return Err("--dataset may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --dataset".to_owned())?;
+                dataset_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--profile" => {
+                if profile_path.is_some() {
+                    return Err("--profile may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --profile".to_owned())?;
+                profile_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--low-pass-tau-ms" => {
+                if low_pass_tau_ms.is_some() {
+                    return Err("--low-pass-tau-ms may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --low-pass-tau-ms".to_owned())?;
+                low_pass_tau_ms = Some(parse_tau_csv(value, "--low-pass-tau-ms")?);
+                index += 2;
+            }
+            "--complementary-tau-ms" => {
+                if complementary_tau_ms.is_some() {
+                    return Err("--complementary-tau-ms may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --complementary-tau-ms".to_owned())?;
+                complementary_tau_ms = Some(parse_tau_csv(value, "--complementary-tau-ms")?);
+                index += 2;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!(
+                    "unsupported option for evaluate: {flag}\n\n{}",
+                    usage()
+                ))
+            }
+            value => {
+                return Err(format!(
+                    "unexpected positional argument for evaluate: {value}"
+                ))
+            }
+        }
+    }
+    if synthetic && dataset_path.is_some() {
+        return Err("--synthetic is mutually exclusive with --dataset".to_owned());
+    }
+    if !synthetic && dataset_path.is_none() {
+        return Err("evaluate requires either --synthetic or --dataset".to_owned());
+    }
+    if dataset_path.is_some() && profile_path.is_none() {
+        return Err("--dataset requires --profile".to_owned());
+    }
+    if profile_path.is_some() && dataset_path.is_none() {
+        return Err("--profile requires --dataset".to_owned());
+    }
+
+    let default = EvaluationConfig::default();
+    let low_pass_tau_ms = low_pass_tau_ms.unwrap_or(default.low_pass_tau_ms);
+    let complementary_tau_ms = complementary_tau_ms.unwrap_or(default.complementary_tau_ms);
+    EvaluationConfig::new(low_pass_tau_ms.clone(), complementary_tau_ms.clone())
+        .map_err(|err| err.to_string())?;
+    Ok(Command::Evaluate {
+        synthetic,
+        dataset_path,
+        profile_path,
+        low_pass_tau_ms,
+        complementary_tau_ms,
+        json,
+    })
 }
 
 fn parse_record_command(args: &[String]) -> Result<Command, String> {
@@ -530,6 +663,40 @@ fn calibrate_command(
     Ok(())
 }
 
+fn evaluate_command(
+    synthetic: bool,
+    dataset_path: Option<PathBuf>,
+    profile_path: Option<PathBuf>,
+    low_pass_tau_ms: Vec<f64>,
+    complementary_tau_ms: Vec<f64>,
+    json: bool,
+) -> Result<(), String> {
+    let config = EvaluationConfig::new(low_pass_tau_ms, complementary_tau_ms)
+        .map_err(|err| err.to_string())?;
+    let report = if synthetic {
+        evaluate_synthetic_suite(&config).map_err(|err| err.to_string())?
+    } else {
+        let dataset = dataset_path.ok_or_else(|| "--dataset is required".to_owned())?;
+        let profile = profile_path.ok_or_else(|| "--profile is required".to_owned())?;
+        evaluate_dataset_file(&dataset, &profile, &config).map_err(|err| match &err {
+            anchor_desktop_lib::motion_filtering::EvaluationError::Dataset(dataset_err) => {
+                if matches!(dataset_err, anchor_desktop_lib::dataset::DatasetAnalysisError::Io(ref io_err) if io_err.kind() == io::ErrorKind::NotFound) { format!("dataset file does not exist: {}", dataset.display()) } else { err.to_string() }
+            }
+            anchor_desktop_lib::motion_filtering::EvaluationError::Calibration(anchor_desktop_lib::calibration::CalibrationError::Io(io_err)) if io_err.kind() == io::ErrorKind::NotFound => format!("profile file does not exist: {}", profile.display()),
+            _ => err.to_string(),
+        })?
+    };
+
+    if json {
+        let rendered = serde_json::to_string_pretty(&report)
+            .map_err(|err| format!("failed to render evaluation JSON: {err}"))?;
+        println!("{rendered}");
+    } else {
+        println!("{}", format_human_evaluation(&report));
+    }
+    Ok(())
+}
+
 fn parse_positive_u64(value: &str, name: &str) -> Result<u64, String> {
     let parsed = value
         .parse::<u64>()
@@ -538,6 +705,40 @@ fn parse_positive_u64(value: &str, name: &str) -> Result<u64, String> {
         return Err(format!("{name} must be a positive integer"));
     }
     Ok(parsed)
+}
+
+fn parse_tau_csv(value: &str, flag: &str) -> Result<Vec<f64>, String> {
+    if value.is_empty() {
+        return Err(format!("{flag} must not be empty"));
+    }
+    let mut out = Vec::new();
+    for token in value.split(',') {
+        if token.is_empty() {
+            return Err(format!("{flag} contains an empty value"));
+        }
+        if !token.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+            return Err(format!("{flag} contains invalid numeric token: {token}"));
+        }
+        let parsed = token
+            .parse::<f64>()
+            .map_err(|_| format!("{flag} contains invalid numeric token: {token}"))?;
+        if format_tau_token(parsed) != token.trim_end_matches(".0")
+            && !(token.ends_with(".0") && format_tau_token(parsed) == token.trim_end_matches(".0"))
+        {
+            return Err(format!("{flag} contains partially numeric token: {token}"));
+        }
+        out.push(parsed);
+    }
+    EvaluationConfig::new(out.clone(), vec![1.0]).map_err(|err| err.to_string())?;
+    Ok(out)
+}
+
+fn format_tau_token(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
 }
 
 fn format_bind_error(bind_addr: SocketAddr, err: &io::Error) -> String {
@@ -556,6 +757,7 @@ fn usage() -> String {
         "  anchor-motion-dataset record --scenario <name> --duration-seconds <seconds> [--output <path>] [--bind <host:port>] [--notes <text>]",
         "  anchor-motion-dataset analyze <file.ndjson> [--json]",
         "  anchor-motion-dataset calibrate <file.ndjson> [--output <profile.json>] [--json]",
+        "  anchor-motion-dataset evaluate (--synthetic | --dataset <file.ndjson> --profile <profile.json>) [--low-pass-tau-ms <csv>] [--complementary-tau-ms <csv>] [--json]",
     ]
     .join("\n")
 }

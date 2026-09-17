@@ -14,6 +14,7 @@
     "motion:record": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- record",
     "motion:analyze": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- analyze",
     "motion:calibrate": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- calibrate",
+    "motion:evaluate": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- evaluate",
     "typecheck": "pnpm -r --if-present run typecheck",
     "protocol:typecheck": "pnpm --filter @anchor/protocol typecheck",
     "protocol:test": "pnpm --filter @anchor/protocol test",

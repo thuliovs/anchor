@@ -20,9 +20,9 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
 5. o frontend Tauri exibe os dados e métricas em tempo real;
-6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, ainda sem aplicação ao fluxo ao vivo.
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary` e avaliar offline estimadores de roll/pitch, ainda sem aplicação ao fluxo ao vivo.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1 e harness determinístico B3a para comparar estimadores de tilt observável. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -329,6 +329,33 @@ Limitações deliberadas:
 - não distingue inclinação do suporte, do veículo e do piso/estrada no instante do zero;
 - ainda não aplica o perfil ao receptor ao vivo nem à UI.
 
+### Avaliacao offline de filtros B3a
+
+O desktop possui um modulo Rust dedicado em `apps/desktop/src-tauri/src/motion_filtering/` para avaliar offline estimadores de roll/pitch sobre sinais calibrados.
+
+Caracteristicas da B3a:
+
+- tres candidatos minimos: gravidade sem filtro adicional do Anchor, passa-baixa vetorial de primeira ordem e complementar gyro + gravidade;
+- primeira amostra inicializa pela gravidade e atualizacoes usam `dt` real de `sessionElapsedUs`;
+- rejeicao direta de `dt` zero, negativo, `NaN` e infinitos nas APIs dos estimadores;
+- fixtures sinteticas deterministicas com ground truth independente de quaternion;
+- fixture de montagem/bias que prova aplicacao da calibracao B2 antes dos estimadores;
+- replay sintetico raw -> perfil B2 da fixture -> estimador;
+- JSON sintetico com `summary` global por configuracao e `fixtureResults[]` por fixture;
+- relatorio humano e JSON `evaluationReportVersion=1` sem timestamp atual e sem caminho absoluto;
+- parametros `low-pass-tau-ms` e `complementary-tau-ms` configuraveis por CLI;
+- datasets fisicos reportados apenas como proxies comportamentais com `groundTruthAvailable=false`.
+
+Limitacoes deliberadas:
+
+- nao escolhe vencedor nem parametros de producao;
+- nao aplica filtros ao receptor ao vivo;
+- nao implementa politica de gaps, stale ou disconnect;
+- nao estima yaw;
+- nao usa magnetometro;
+- nao usa correcao adaptativa por aceleracao linear;
+- nao mede latencia fisica entre sensores, pois o payload nao contem timestamps individuais.
+
 ## 9. Simulador de movimento
 
 `@anchor/motion-simulator` permite validar protocolo e receptor sem celular.
@@ -506,6 +533,8 @@ Calibração offline:
 ```bash
 pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson --output artifacts/motion-calibrations/<profile>.json --json
+pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
+pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<dataset>.ndjson --profile artifacts/motion-calibrations/<profile>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 ```
 
 Validações principais:
@@ -543,7 +572,7 @@ cd apps/mobile/android
 
 - horizonte artificial/overlay final;
 - janela transparente, always-on-top e click-through;
-- modelo de movimento, orientação ou fusão de sensores destinado ao visual;
+- modelo de movimento, orientação ou fusão de sensores destinado ao visual ao vivo;
 - aplicação da calibração ao fluxo ao vivo;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
@@ -604,11 +633,12 @@ Concluída em 2 de setembro de 2026.
 
 1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
 2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
-3. Comparar filtro complementar, filtros passa-baixa e outras abordagens de fusão.
-4. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
-5. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1. A escolha de vencedor e parametros de producao permanece para B3b.
+4. Comparar os resultados da B3a e definir candidato/parametros de producao.
+5. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
+6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
 
-As fatias B1 e B2 estão concluídas. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de filtros/fusão, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
+As fatias B1, B2 e B3a estão concluídas. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de escolha de filtro/parametros de producao, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
 
 ### Fase C — Primeiro overlay experimental
 

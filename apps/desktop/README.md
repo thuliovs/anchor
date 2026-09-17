@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui uma calibracao/zero offline v1 a partir de um dataset `stationary`, mas a aplicacao do perfil ao fluxo ao vivo ainda nao existe.
+Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary` e um harness offline B3a para avaliar estimadores de roll/pitch. A aplicacao do perfil e dos filtros ao fluxo ao vivo ainda nao existe.
 
 ## Como executar
 
@@ -41,6 +41,8 @@ pnpm motion:record -- --scenario stationary --duration-seconds 15
 pnpm motion:analyze -- artifacts/motion-datasets/<arquivo>.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson --output artifacts/motion-calibrations/<perfil>.json --json
+pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
+pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<arquivo>.ndjson --profile artifacts/motion-calibrations/<perfil>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 ```
 
 O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
@@ -65,6 +67,18 @@ Limitacoes deliberadas da v1:
 - a operacao nao distingue inclinacao do suporte, do veiculo e do piso/estrada no instante do zero.
 
 Por enquanto, o perfil serve apenas para operacao offline e testes. O receptor, o analyzer B1, o protocolo e o fluxo standalone existente permanecem inalterados.
+
+## Avaliacao offline de filtros B3a
+
+O harness B3a compara, de forma deterministica e offline, tres candidatos minimos para tilt observavel:
+
+- gravidade calibrada sem filtro adicional do Anchor;
+- passa-baixa vetorial de primeira ordem parametrizado por `tau`;
+- complementar gyro + direcao da gravidade parametrizado por `correctionTau`.
+
+Ele usa `sessionElapsedUs` para calcular `dt` real, reutiliza B1 para carregar datasets e B2 para aplicar o perfil. Na suite sintetica, cada fixture passa por raw -> perfil B2 -> estimador e a saida JSON traz `summary` global por configuracao mais `fixtureResults[]` por fixture. A saida JSON usa `evaluationReportVersion = 1`, nao inclui timestamp atual, nao escolhe vencedor e marca datasets fisicos como `groundTruthAvailable=false`.
+
+Os resultados das capturas fisicas sao proxies comportamentais, nao metricas de acuracia angular. O uso do perfil estacionario nas demais capturas pressupoe o mesmo telefone e montagem preservada.
 
 ## Endereco e porta padrao
 
@@ -166,8 +180,16 @@ pnpm build:mobile:standalone
 apps/desktop/src-tauri/src/
 ├── calibration/
 │   └── mod.rs
+├── dataset/
+│   └── mod.rs
 ├── lib.rs
 ├── main.rs
+├── motion_filtering/
+│   ├── estimator.rs
+│   ├── metrics.rs
+│   ├── mod.rs
+│   ├── report.rs
+│   └── synthetic.rs
 ├── protocol.rs
 └── receiver/
     ├── mod.rs
