@@ -20,9 +20,9 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
 5. o frontend Tauri exibe os dados e métricas em tempo real;
-6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary` e avaliar offline estimadores de roll/pitch, ainda sem aplicação ao fluxo ao vivo.
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch e executar uma seleção offline B3b, ainda sem aplicação ao fluxo ao vivo.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1 e harness determinístico B3a para comparar estimadores de tilt observável. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável e camada B3b para seleção offline auditável. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -356,6 +356,25 @@ Limitacoes deliberadas:
 - nao usa correcao adaptativa por aceleracao linear;
 - nao mede latencia fisica entre sensores, pois o payload nao contem timestamps individuais.
 
+### Selecao offline de filtros B3b
+
+O desktop possui uma camada separada `motion_filtering::selection` para transformar a evidencia B3a em uma decisao reproduzivel quando as nove capturas B1 e o perfil B2 estao disponiveis.
+
+Caracteristicas da B3b:
+
+- reutiliza os estimadores, fixtures, metricas e replay da B3a;
+- avalia o grid padrao `low-pass tauMs = 25,50,75,100,150,200,300,400,600,800` e `complementary correctionTauMs = 50,75,100,150,250,400,600,1000,1500,2000`, com listas customizaveis por CLI;
+- exige exatamente as nove capturas fisicas selecionadas da B1 e o perfil B2 estacionario;
+- separa metricas sinteticas com ground truth de proxies fisicos;
+- aplica gates estruturais, identifica configuracoes dominadas e calcula fronteira de Pareto com tolerancias fisicas declaradas;
+- preserva metricas de evento como `available`, `failed` ou `unavailable`, sem converter indisponibilidade aplicavel em zero;
+- usa as capturas fisicas apenas como proxies comportamentais, com `stationary` participando somente como proxy tardio de repouso;
+- emite JSON `selectionReportVersion = 1` e relatorio humano deterministico;
+- define o contrato Rust `TiltEstimatorPolicyV1`, validado, com `yawAvailable=false` e `source=b3b_offline_selection`;
+- nao aplica a politica ao receptor ao vivo.
+
+Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Na execucao real B3b recalculada com as nove capturas e o perfil B2 selecionado, a politica recomendada foi `gravity_no_additional_anchor_filter` com parametros vazios, `yawAvailable = false` e `source = b3b_offline_selection`. A recomendacao anterior `complementary_tau_ms_400` nao e preservada por compatibilidade.
+
 ## 9. Simulador de movimento
 
 `@anchor/motion-simulator` permite validar protocolo e receptor sem celular.
@@ -535,6 +554,7 @@ pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson --output artifacts/motion-calibrations/<profile>.json --json
 pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<dataset>.ndjson --profile artifacts/motion-calibrations/<profile>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
+pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
 ```
 
 Validações principais:
@@ -633,12 +653,12 @@ Concluída em 2 de setembro de 2026.
 
 1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
 2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
-3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1. A escolha de vencedor e parametros de producao permanece para B3b.
-4. Comparar os resultados da B3a e definir candidato/parametros de producao.
+3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
+4. Concluido na fatia B3b: implementar selecao offline, Pareto, contrato de politica e documentacao para definir candidato/parametros quando as nove capturas fisicas estiverem disponiveis localmente. A aplicacao ao receptor ao vivo permanece fora de escopo.
 5. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
 6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
 
-As fatias B1, B2 e B3a estão concluídas. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de escolha de filtro/parametros de producao, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
+As fatias B1, B2, B3a e B3b estão concluídas em código e documentação. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de aplicação ao vivo, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
 
 ### Fase C — Primeiro overlay experimental
 

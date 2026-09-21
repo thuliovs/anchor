@@ -8,7 +8,13 @@ use anchor_desktop_lib::{
         start_dataset_recorder, DatasetRecorderConfig, RecordingScenario,
     },
     motion_filtering::{
-        evaluate_dataset_file, evaluate_synthetic_suite, format_human_evaluation, EvaluationConfig,
+        evaluate_dataset_file, evaluate_synthetic_suite, format_human_evaluation,
+        selection::{
+            format_human_selection, select_tilt_estimator, PhysicalDatasetSelectionInput,
+            SelectionConfig, DEFAULT_SELECTION_COMPLEMENTARY_TAU_MS,
+            DEFAULT_SELECTION_LOW_PASS_TAU_MS,
+        },
+        EvaluationConfig,
     },
     receiver::{
         udp::{start_udp_receiver, UdpReceiverConfig},
@@ -66,6 +72,19 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             complementary_tau_ms,
             json,
         ),
+        Command::Select {
+            profile_path,
+            datasets,
+            low_pass_tau_ms,
+            complementary_tau_ms,
+            json,
+        } => select_command(
+            profile_path,
+            datasets,
+            low_pass_tau_ms,
+            complementary_tau_ms,
+            json,
+        ),
     }
 }
 
@@ -95,6 +114,13 @@ enum Command {
         complementary_tau_ms: Vec<f64>,
         json: bool,
     },
+    Select {
+        profile_path: PathBuf,
+        datasets: Vec<PhysicalDatasetSelectionInput>,
+        low_pass_tau_ms: Vec<f64>,
+        complementary_tau_ms: Vec<f64>,
+        json: bool,
+    },
 }
 
 fn parse_command(args: &[String]) -> Result<Command, String> {
@@ -107,9 +133,98 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         "analyze" => parse_analyze_command(&args[1..]),
         "calibrate" => parse_calibrate_command(&args[1..]),
         "evaluate" => parse_evaluate_command(&args[1..]),
+        "select" => parse_select_command(&args[1..]),
         "--help" | "-h" => Err(usage()),
         other => Err(format!("unsupported subcommand: {other}\n\n{}", usage())),
     }
+}
+
+fn parse_select_command(args: &[String]) -> Result<Command, String> {
+    let mut profile_path: Option<PathBuf> = None;
+    let mut datasets = Vec::new();
+    let mut low_pass_tau_ms: Option<Vec<f64>> = None;
+    let mut complementary_tau_ms: Option<Vec<f64>> = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--" => index += 1,
+            "--json" => {
+                if json {
+                    return Err("--json may only be provided once".to_owned());
+                }
+                json = true;
+                index += 1;
+            }
+            "--profile" => {
+                if profile_path.is_some() {
+                    return Err("--profile may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --profile".to_owned())?;
+                profile_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--dataset" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --dataset".to_owned())?;
+                let (scenario, path) = parse_scenario_dataset(value)?;
+                datasets.push(PhysicalDatasetSelectionInput { scenario, path });
+                index += 2;
+            }
+            "--low-pass-tau-ms" => {
+                if low_pass_tau_ms.is_some() {
+                    return Err("--low-pass-tau-ms may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --low-pass-tau-ms".to_owned())?;
+                low_pass_tau_ms = Some(parse_tau_csv(value, "--low-pass-tau-ms")?);
+                index += 2;
+            }
+            "--complementary-tau-ms" => {
+                if complementary_tau_ms.is_some() {
+                    return Err("--complementary-tau-ms may only be provided once".to_owned());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --complementary-tau-ms".to_owned())?;
+                complementary_tau_ms = Some(parse_tau_csv(value, "--complementary-tau-ms")?);
+                index += 2;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!(
+                    "unsupported option for select: {flag}\n\n{}",
+                    usage()
+                ))
+            }
+            value => {
+                return Err(format!(
+                    "unexpected positional argument for select: {value}"
+                ))
+            }
+        }
+    }
+    let profile_path = profile_path.ok_or_else(|| "select requires --profile".to_owned())?;
+    let low_pass_tau_ms = low_pass_tau_ms.unwrap_or(DEFAULT_SELECTION_LOW_PASS_TAU_MS.to_vec());
+    let complementary_tau_ms =
+        complementary_tau_ms.unwrap_or(DEFAULT_SELECTION_COMPLEMENTARY_TAU_MS.to_vec());
+    SelectionConfig::new(
+        profile_path.clone(),
+        datasets.clone(),
+        low_pass_tau_ms.clone(),
+        complementary_tau_ms.clone(),
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(Command::Select {
+        profile_path,
+        datasets,
+        low_pass_tau_ms,
+        complementary_tau_ms,
+        json,
+    })
 }
 
 fn parse_evaluate_command(args: &[String]) -> Result<Command, String> {
@@ -697,6 +812,51 @@ fn evaluate_command(
     Ok(())
 }
 
+fn select_command(
+    profile_path: PathBuf,
+    datasets: Vec<PhysicalDatasetSelectionInput>,
+    low_pass_tau_ms: Vec<f64>,
+    complementary_tau_ms: Vec<f64>,
+    json: bool,
+) -> Result<(), String> {
+    let config = SelectionConfig::new(
+        profile_path.clone(),
+        datasets,
+        low_pass_tau_ms,
+        complementary_tau_ms,
+    )
+    .map_err(|err| err.to_string())?;
+    let report = select_tilt_estimator(config).map_err(|err| match &err {
+        anchor_desktop_lib::motion_filtering::selection::SelectionError::Evaluation(
+            anchor_desktop_lib::motion_filtering::EvaluationError::Dataset(dataset_err),
+        ) => {
+            if matches!(dataset_err, anchor_desktop_lib::dataset::DatasetAnalysisError::Io(ref io_err) if io_err.kind() == io::ErrorKind::NotFound)
+            {
+                "dataset file does not exist for one of the selected scenarios".to_owned()
+            } else {
+                err.to_string()
+            }
+        }
+        anchor_desktop_lib::motion_filtering::selection::SelectionError::Evaluation(
+            anchor_desktop_lib::motion_filtering::EvaluationError::Calibration(
+                anchor_desktop_lib::calibration::CalibrationError::Io(io_err),
+            ),
+        ) if io_err.kind() == io::ErrorKind::NotFound => {
+            format!("profile file does not exist: {}", profile_path.display())
+        }
+        _ => err.to_string(),
+    })?;
+
+    if json {
+        let rendered = serde_json::to_string_pretty(&report)
+            .map_err(|err| format!("failed to render selection JSON: {err}"))?;
+        println!("{rendered}");
+    } else {
+        println!("{}", format_human_selection(&report));
+    }
+    Ok(())
+}
+
 fn parse_positive_u64(value: &str, name: &str) -> Result<u64, String> {
     let parsed = value
         .parse::<u64>()
@@ -733,6 +893,17 @@ fn parse_tau_csv(value: &str, flag: &str) -> Result<Vec<f64>, String> {
     Ok(out)
 }
 
+fn parse_scenario_dataset(value: &str) -> Result<(RecordingScenario, PathBuf), String> {
+    let Some((scenario, path)) = value.split_once('=') else {
+        return Err("--dataset must use scenario=path".to_owned());
+    };
+    if path.is_empty() {
+        return Err("--dataset path must not be empty".to_owned());
+    }
+    let scenario = scenario.parse::<RecordingScenario>()?;
+    Ok((scenario, PathBuf::from(path)))
+}
+
 fn format_tau_token(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{}", value as i64)
@@ -758,6 +929,7 @@ fn usage() -> String {
         "  anchor-motion-dataset analyze <file.ndjson> [--json]",
         "  anchor-motion-dataset calibrate <file.ndjson> [--output <profile.json>] [--json]",
         "  anchor-motion-dataset evaluate (--synthetic | --dataset <file.ndjson> --profile <profile.json>) [--low-pass-tau-ms <csv>] [--complementary-tau-ms <csv>] [--json]",
+        "  anchor-motion-dataset select --profile <profile.json> --dataset <scenario=file.ndjson>... [--low-pass-tau-ms <csv>] [--complementary-tau-ms <csv>] [--json]",
     ]
     .join("\n")
 }

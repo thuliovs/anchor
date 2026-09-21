@@ -1,6 +1,7 @@
 pub mod estimator;
 pub mod metrics;
 pub mod report;
+pub mod selection;
 pub mod synthetic;
 
 use crate::{

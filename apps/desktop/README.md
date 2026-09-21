@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary` e um harness offline B3a para avaliar estimadores de roll/pitch. A aplicacao do perfil e dos filtros ao fluxo ao vivo ainda nao existe.
+Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch e uma selecao offline B3b para produzir uma politica recomendada versionada quando as evidencias locais estao disponiveis. A aplicacao do perfil e dos filtros ao fluxo ao vivo ainda nao existe.
 
 ## Como executar
 
@@ -43,6 +43,7 @@ pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson --output artifacts/motion-calibrations/<perfil>.json --json
 pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<arquivo>.ndjson --profile artifacts/motion-calibrations/<perfil>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
+pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
 ```
 
 O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
@@ -79,6 +80,14 @@ O harness B3a compara, de forma deterministica e offline, tres candidatos minimo
 Ele usa `sessionElapsedUs` para calcular `dt` real, reutiliza B1 para carregar datasets e B2 para aplicar o perfil. Na suite sintetica, cada fixture passa por raw -> perfil B2 -> estimador e a saida JSON traz `summary` global por configuracao mais `fixtureResults[]` por fixture. A saida JSON usa `evaluationReportVersion = 1`, nao inclui timestamp atual, nao escolhe vencedor e marca datasets fisicos como `groundTruthAvailable=false`.
 
 Os resultados das capturas fisicas sao proxies comportamentais, nao metricas de acuracia angular. O uso do perfil estacionario nas demais capturas pressupoe o mesmo telefone e montagem preservada.
+
+## Selecao offline de filtros B3b
+
+A B3b adiciona uma camada decisoria separada em `motion_filtering::selection`. Ela reutiliza a B3a, avalia o grid configuravel de parametros, executa os nove datasets fisicos B1 com o perfil B2, aplica gates estruturais, calcula configuracoes dominadas e fronteira de Pareto com tolerancias fisicas declaradas, e emite `selectionReportVersion = 1`.
+
+O contrato `TiltEstimatorPolicyV1` representa a decisao recomendada para uso futuro pelo receptor, mas a B3b nao le esse contrato automaticamente nem altera o fluxo ao vivo. `yawAvailable` permanece sempre `false`.
+
+Metricas de evento no JSON preservam `available`, `failed` ou `unavailable` com unidade e motivo; indisponibilidade aplicavel nao vira `0.0`. Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, `motion:select` retorna erro controlado. As metricas fisicas sao proxies comportamentais, nao acuracia angular. Na execucao real recalculada com as nove capturas locais, a politica recomendada e `gravity_no_additional_anchor_filter` sem parametros; a recomendacao antiga `complementary_tau_ms_400` nao e preservada.
 
 ## Endereco e porta padrao
 
@@ -189,6 +198,7 @@ apps/desktop/src-tauri/src/
 │   ├── metrics.rs
 │   ├── mod.rs
 │   ├── report.rs
+│   ├── selection.rs
 │   └── synthetic.rs
 ├── protocol.rs
 └── receiver/
