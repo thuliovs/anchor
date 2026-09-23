@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+# Windows command scripts require CRLF for reliable native execution.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Keep known binary assets out of line-ending normalization.
+*.icns binary
+*.ico binary
+*.jar binary
+*.keystore binary
+*.png binary
