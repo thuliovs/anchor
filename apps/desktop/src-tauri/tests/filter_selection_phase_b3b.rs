@@ -114,6 +114,27 @@ fn selection_rejects_missing_duplicate_and_invalid_grids() {
 }
 
 #[test]
+fn selection_rejects_dataset_label_that_disagrees_with_metadata_scenario() {
+    let fixture = write_selection_fixture("scenario-mismatch");
+    let mut swapped = fixture.datasets.clone();
+    swapped.swap(0, 1);
+    let mut relabeled = all_scenarios()
+        .into_iter()
+        .zip(swapped.into_iter().map(|input| input.path))
+        .map(|(scenario, path)| PhysicalDatasetSelectionInput { scenario, path })
+        .collect::<Vec<_>>();
+    relabeled.sort_by_key(|input| input.scenario.as_str());
+
+    let err = select_tilt_estimator(
+        SelectionConfig::new(fixture.profile, relabeled, vec![50.0], vec![100.0])
+            .expect("labels are complete and unique"),
+    )
+    .expect_err("dataset metadata scenario mismatch must be rejected");
+
+    assert!(err.to_string().contains("physical scenario mismatch"));
+}
+
+#[test]
 fn cli_select_json_human_and_error_paths_work() {
     let fixture = write_selection_fixture("cli");
     let mut args = vec![

@@ -1,5 +1,5 @@
 use crate::{
-    dataset::RecordingScenario,
+    dataset::{load_validated_dataset_file, RecordingScenario},
     motion_filtering::{
         evaluate_dataset_file, evaluate_synthetic_suite, report::MetricValue,
         synthetic::synthetic_suite, EvaluationConfig, EvaluationError,
@@ -402,6 +402,8 @@ pub struct SelectionRecommendation {
 }
 
 pub fn select_tilt_estimator(config: SelectionConfig) -> Result<SelectionReport, SelectionError> {
+    validate_physical_dataset_metadata(&config.datasets)?;
+
     let evaluation_config = EvaluationConfig::new(
         config.low_pass_tau_ms.clone(),
         config.complementary_tau_ms.clone(),
@@ -636,6 +638,23 @@ fn validate_dataset_inputs(inputs: &[PhysicalDatasetSelectionInput]) -> Result<(
             "missing physical scenarios: {}",
             missing.join(", ")
         )));
+    }
+    Ok(())
+}
+
+fn validate_physical_dataset_metadata(
+    inputs: &[PhysicalDatasetSelectionInput],
+) -> Result<(), SelectionError> {
+    for input in inputs {
+        let dataset = load_validated_dataset_file(&input.path).map_err(EvaluationError::from)?;
+        if dataset.metadata.scenario != input.scenario {
+            return Err(SelectionError::InvalidInput(format!(
+                "physical scenario mismatch for {}: argument label is {}, dataset metadata is {}",
+                safe_basename(&input.path),
+                input.scenario.as_str(),
+                dataset.metadata.scenario.as_str()
+            )));
+        }
     }
     Ok(())
 }
