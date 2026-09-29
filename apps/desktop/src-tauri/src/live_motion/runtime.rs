@@ -10,11 +10,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
-use tokio::{sync::mpsc, task::JoinHandle};
 
 pub const CALIBRATION_PROFILE_PATH_ENV: &str = "ANCHOR_CALIBRATION_PROFILE_PATH";
 pub const TILT_POLICY_PATH_ENV: &str = "ANCHOR_TILT_POLICY_PATH";
@@ -123,7 +123,7 @@ impl LiveTiltRuntime {
 
 #[derive(Clone)]
 pub struct LiveTiltIngress {
-    tx: mpsc::Sender<AcceptedSampleEvent>,
+    tx: mpsc::SyncSender<AcceptedSampleEvent>,
     counters: Arc<LiveTiltIntegrationCounters>,
 }
 
@@ -131,8 +131,8 @@ impl AcceptedSampleSink for LiveTiltIngress {
     fn try_publish(&self, event: AcceptedSampleEvent) {
         match self.tx.try_send(event) {
             Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => self.counters.increment_dropped(),
-            Err(mpsc::error::TrySendError::Closed(_)) => self.counters.increment_closed(),
+            Err(mpsc::TrySendError::Full(_)) => self.counters.increment_dropped(),
+            Err(mpsc::TrySendError::Disconnected(_)) => self.counters.increment_closed(),
         }
     }
 }
@@ -141,16 +141,16 @@ pub struct LiveTiltRuntimeHandle {
     pub state: SharedLiveTiltRuntime,
     pub sink: Arc<dyn AcceptedSampleSink>,
     shutdown_tx: Option<mpsc::Sender<()>>,
-    join_handle: JoinHandle<()>,
+    join_handle: thread::JoinHandle<()>,
 }
 
 impl LiveTiltRuntimeHandle {
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(()).await;
+            let _ = tx.send(());
         }
-        if let Err(err) = self.join_handle.await {
-            eprintln!("live tilt runtime shutdown join error: {err}");
+        if let Err(err) = self.join_handle.join() {
+            eprintln!("live tilt runtime shutdown join error: {err:?}");
         }
     }
 }
@@ -168,27 +168,27 @@ pub fn start_live_tilt_runtime_from_env() -> LiveTiltRuntimeHandle {
 
 pub fn start_live_tilt_runtime(pipeline: LiveMotionPipeline) -> LiveTiltRuntimeHandle {
     let runtime = Arc::new(LiveTiltRuntime::new(pipeline));
-    let (tx, mut rx) = mpsc::channel(LIVE_MOTION_INGRESS_CAPACITY);
-    let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+    let (tx, rx) = mpsc::sync_channel(LIVE_MOTION_INGRESS_CAPACITY);
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let task_runtime = runtime.clone();
-    let join_handle = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = shutdown_rx.recv() => break,
-                event = rx.recv() => {
-                    let Some(event) = event else { break; };
-                    match task_runtime.state.lock() {
-                        Ok(mut state) => {
-                            state.process(event);
-                            task_runtime.integration_counters.increment_processed();
-                        }
-                        Err(_) => {
-                            eprintln!("live tilt runtime lock poisoned while processing event");
-                            break;
-                        }
-                    }
+    let join_handle = thread::spawn(move || loop {
+        if shutdown_rx.try_recv().is_ok() {
+            break;
+        }
+
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(event) => match task_runtime.state.lock() {
+                Ok(mut state) => {
+                    state.process(event);
+                    task_runtime.integration_counters.increment_processed();
                 }
-            }
+                Err(_) => {
+                    eprintln!("live tilt runtime lock poisoned while processing event");
+                    break;
+                }
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     });
     let sink = Arc::new(LiveTiltIngress {
@@ -471,7 +471,7 @@ mod tests {
             NeutralReason::MissingConfiguration,
         )));
         let guard = runtime.state.lock().unwrap();
-        let (tx, _rx) = mpsc::channel(1);
+        let (tx, _rx) = mpsc::sync_channel(1);
         let sink = LiveTiltIngress {
             tx,
             counters: runtime.integration_counters.clone(),
@@ -507,7 +507,7 @@ mod tests {
             NeutralReason::MissingConfiguration,
         )));
         let guard = runtime.state.lock().unwrap();
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::sync_channel(1);
         drop(rx);
         let sink = LiveTiltIngress {
             tx,
