@@ -297,8 +297,9 @@ impl FixedWindowRateLimiter {
 mod tests {
     use super::{
         udp::{start_udp_receiver, UdpReceiverConfig},
-        FixedWindowRateLimiter, ReceiverMetrics, ReceiverState, ReceiverStatusDto,
-        SharedReceiverState, StreamStatus, MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
+        AcceptedSampleEvent, AcceptedSampleSink, FixedWindowRateLimiter, ReceiverMetrics,
+        ReceiverState, ReceiverStatusDto, SharedReceiverState, StreamStatus,
+        MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
     };
     use crate::protocol::MotionSampleV1;
     use serde_json::json;
@@ -308,6 +309,15 @@ mod tests {
         time::{Duration, Instant},
     };
     use tokio::{net::UdpSocket, sync::watch};
+
+    #[derive(Default)]
+    struct CountingSink(Mutex<u64>);
+
+    impl AcceptedSampleSink for CountingSink {
+        fn try_publish(&self, _event: AcceptedSampleEvent) {
+            *self.0.lock().expect("sink lock") += 1;
+        }
+    }
 
     const VALID_FIXTURE: &str =
         include_str!("../../../../../packages/protocol/fixtures/valid/motion-sample.json");
@@ -724,6 +734,50 @@ mod tests {
             "ignored samples must not be published"
         );
 
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn udp_receiver_does_not_send_rejected_packets_to_sink() {
+        let shared_state: SharedReceiverState = Arc::new(Mutex::new(ReceiverState::default()));
+        let (sample_tx, _sample_rx) = watch::channel(None);
+        let sink = Arc::new(CountingSink::default());
+        let receiver = start_udp_receiver(
+            UdpReceiverConfig {
+                bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
+                accepted_sample_sink: Some(sink.clone()),
+                ..UdpReceiverConfig::default()
+            },
+            shared_state,
+            sample_tx,
+        )
+        .await
+        .expect("receiver should start");
+
+        let sender_socket = UdpSocket::bind("127.0.0.1:0").await.expect("sender bind");
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send initial datagram");
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send duplicate datagram");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if *sink.0.lock().expect("sink lock") == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sink did not receive accepted sample"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(*sink.0.lock().expect("sink lock"), 1);
         receiver.shutdown().await;
     }
 

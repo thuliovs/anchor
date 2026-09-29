@@ -5,10 +5,14 @@ import assert from "node:assert/strict";
 import type { MotionSampleV1 } from "@anchor/protocol";
 import {
   clamp,
+  EMPTY_LIVE_TILT_SNAPSHOT,
   formatSampleNumber,
+  getLiveTiltStateLabel,
+  getNeutralReasonLabel,
   getDisplayedSample,
   mapAccelerationToOffset,
   RECEIVER_SOURCE_LABEL,
+  usableTilt,
 } from "./diagnostics";
 
 function sample(overrides?: Partial<MotionSampleV1>): MotionSampleV1 {
@@ -76,4 +80,47 @@ test("receiver source label describes all IPv4 interfaces instead of loopback", 
     "Receptor UDP (todas as interfaces IPv4, porta 57421)",
   );
   assert.equal(RECEIVER_SOURCE_LABEL.includes("127.0.0.1"), false);
+});
+
+test("live tilt states map to user-facing labels", () => {
+  assert.equal(getLiveTiltStateLabel("unavailable"), "Indisponível");
+  assert.equal(getLiveTiltStateLabel("warming_up"), "Aquecendo");
+  assert.equal(getLiveTiltStateLabel("valid"), "Válido");
+  assert.equal(getLiveTiltStateLabel("invalid"), "Inválido");
+  assert.equal(getLiveTiltStateLabel("stale"), "Sinal desatualizado");
+  assert.equal(getLiveTiltStateLabel("disconnected"), "Desconectado");
+});
+
+test("neutral reason label replaces every underscore for ES2020 compatibility", () => {
+  assert.equal(
+    getNeutralReasonLabel("calibration_policy_provenance_mismatch"),
+    "calibration policy provenance mismatch",
+  );
+});
+
+test("usable tilt is neutral outside valid state", () => {
+  assert.deepEqual(
+    usableTilt({
+      ...EMPTY_LIVE_TILT_SNAPSHOT,
+      validity: "stale",
+      targetTilt: { rollRad: 1, pitchRad: 2 },
+    }),
+    { rollRad: 0, pitchRad: 0 },
+  );
+});
+
+test("usable tilt presents roll and pitch when valid", () => {
+  assert.deepEqual(
+    usableTilt({
+      ...EMPTY_LIVE_TILT_SNAPSHOT,
+      validity: "valid",
+      neutralReason: "none",
+      targetTilt: { rollRad: 0.1, pitchRad: -0.2 },
+    }),
+    { rollRad: 0.1, pitchRad: -0.2 },
+  );
+});
+
+test("empty tilt snapshot has absent sample age", () => {
+  assert.equal(EMPTY_LIVE_TILT_SNAPSHOT.lastSampleAgeMs, null);
 });

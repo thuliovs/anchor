@@ -18,12 +18,14 @@ pub mod motion_filtering;
 pub mod protocol;
 pub mod receiver;
 
+use live_motion::runtime::{read_live_tilt_snapshot, LiveTiltRuntimeHandle, SharedLiveTiltRuntime};
 use receiver::{
     udp::{start_udp_receiver, UdpReceiverConfig, UdpReceiverHandle},
     ReceiverSnapshotDto, ReceiverState, SharedReceiverState,
 };
 
 type SharedReceiverHandle = Arc<Mutex<Option<UdpReceiverHandle>>>;
+type SharedLiveTiltHandle = Arc<Mutex<Option<LiveTiltRuntimeHandle>>>;
 
 const MOTION_SAMPLE_EVENT: &str = "anchor-motion-sample-v1";
 
@@ -43,6 +45,13 @@ fn get_receiver_snapshot(
     receiver_state: tauri::State<'_, SharedReceiverState>,
 ) -> Result<ReceiverSnapshotDto, String> {
     read_receiver_snapshot(&receiver_state, Instant::now())
+}
+
+#[tauri::command]
+fn get_live_tilt_snapshot(
+    live_tilt_state: tauri::State<'_, SharedLiveTiltRuntime>,
+) -> Result<live_motion::runtime::LiveTiltRuntimeSnapshotV1, String> {
+    read_live_tilt_snapshot(&live_tilt_state, Instant::now())
 }
 
 fn spawn_motion_sample_bridge<R: Runtime>(
@@ -82,20 +91,37 @@ fn create_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, tauri::Er
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![get_receiver_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            get_receiver_snapshot,
+            get_live_tilt_snapshot
+        ])
         .setup(|app| {
             let receiver_state: SharedReceiverState =
                 Arc::new(Mutex::new(ReceiverState::default()));
             let receiver_handle: SharedReceiverHandle = Arc::new(Mutex::new(None));
+            let live_tilt_handle: SharedLiveTiltHandle = Arc::new(Mutex::new(None));
             let (motion_sample_tx, motion_sample_rx) = watch::channel(None);
+            let live_tilt = live_motion::runtime::start_live_tilt_runtime_from_env();
+            let live_tilt_state = live_tilt.state.clone();
+            let live_tilt_sink = live_tilt.sink.clone();
 
             app.manage(receiver_state.clone());
             app.manage(receiver_handle.clone());
+            app.manage(live_tilt_state);
+            app.manage(live_tilt_handle.clone());
+            if let Ok(mut slot) = live_tilt_handle.lock() {
+                *slot = Some(live_tilt);
+            } else {
+                eprintln!("failed to store live tilt runtime handle");
+            }
             spawn_motion_sample_bridge(app.handle().clone(), motion_sample_rx);
 
             tauri::async_runtime::spawn(async move {
                 match start_udp_receiver(
-                    UdpReceiverConfig::default(),
+                    UdpReceiverConfig {
+                        accepted_sample_sink: Some(live_tilt_sink),
+                        ..UdpReceiverConfig::default()
+                    },
                     receiver_state,
                     motion_sample_tx,
                 )

@@ -20,9 +20,9 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
 5. o frontend Tauri exibe os dados e métricas em tempo real;
-6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e possui um núcleo Rust puro B4a para processar tilt vivo a partir de `AcceptedSampleEvent`, ainda sem ligação ao UDP/Tauri/UI.
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e ligar o núcleo Rust puro B4a ao receiver/Tauri/UI como diagnóstico B4b.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável, camada B3b para seleção offline auditável e núcleo B4a Rust puro para snapshots seguros de tilt. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável, camada B3b para seleção offline auditável e runtime B4b que expõe snapshots seguros de tilt processado. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -285,7 +285,7 @@ Métricas:
 
 ### Ponte Tauri e diagnóstico
 
-O backend publica a última amostra aceita no evento `anchor-motion-sample-v1`. O frontend recebe esse evento para movimento ao vivo e consulta `get_receiver_snapshot` sequencialmente a cada 250 ms para estado e métricas.
+O backend publica a última amostra aceita no evento `anchor-motion-sample-v1`. O frontend recebe esse evento para movimento bruto ao vivo e consulta `get_receiver_snapshot` e `get_live_tilt_snapshot` sequencialmente a cada 250 ms para estado, métricas e diagnóstico de tilt processado.
 
 A visualização atual move um marcador diretamente com `linearAccelerationMps2.x/y`. Ela não integra posição, não estima orientação e não representa ainda o horizonte artificial final.
 
@@ -348,6 +348,12 @@ Características:
 - limites iniciais: gap contínuo máximo de `100 ms`, warm-up de duas amostras, stale acima de `250 ms`, disconnected acima de `1 s`.
 
 Os limites de `100 ms` e duas amostras são políticas iniciais de engenharia, não limites clínicos. As métricas temporais online medem intervalos de origem, interarrival de recepção e variação relativa; não são latência ponta a ponta.
+
+### Integração diagnóstica de tilt vivo B4b
+
+B4b adiciona uma camada runtime separada em `live_motion::runtime`: carrega explicitamente `ANCHOR_CALIBRATION_PROFILE_PATH` e `ANCHOR_TILT_POLICY_PATH`, cria o `LiveMotionPipeline`, recebe somente `AcceptedSampleEvent` publicados pelo receiver, usa fila bounded com `try_send` e processa eventos em uma task dedicada. Configuração ausente ou inválida deixa o pipeline `unavailable` e `targetTilt` neutro, sem impedir o receiver UDP de iniciar.
+
+O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. Não há overlay, janela transparente, click-through, nova validação física ou medição formal de latência ponta a ponta nesta fatia.
 
 ### Avaliacao offline de filtros B3a
 

@@ -6,6 +6,30 @@ export const SNAPSHOT_POLL_INTERVAL_MS = 250;
 export const VISUAL_RANGE_MPS2 = 12;
 
 export type ReceiverStatus = "active" | "stale" | "disconnected";
+export type LiveTiltState =
+  | "unavailable"
+  | "awaiting_sample"
+  | "warming_up"
+  | "valid"
+  | "invalid"
+  | "stale"
+  | "disconnected";
+export type LiveTiltNeutralReason =
+  | "none"
+  | "missing_configuration"
+  | "invalid_profile"
+  | "invalid_policy"
+  | "calibration_policy_provenance_mismatch"
+  | "awaiting_first_sample"
+  | "warm_up"
+  | "session_changed"
+  | "temporal_gap"
+  | "invalid_dt"
+  | "sequence_non_monotonic"
+  | "calibration_error"
+  | "estimator_error"
+  | "stale"
+  | "disconnected";
 
 export interface ReceiverSnapshotDto {
   status: ReceiverStatus;
@@ -26,6 +50,92 @@ export interface ReceiverMetricsDto {
   foreignSessionPackets: number;
   rateLimitedDatagrams: number;
 }
+
+export interface Tilt2Dto {
+  rollRad: number;
+  pitchRad: number;
+}
+
+export interface AngleEstimateDto extends Tilt2Dto {
+  yawAvailable: boolean;
+  gravityDirection: { x: number; y: number; z: number };
+}
+
+export interface LiveTiltMetricsDto {
+  processedEvents: number;
+  validOutputs: number;
+  sequenceGapEvents: number;
+  estimatedMissingSamples: number;
+  nonMonotonicSequenceEvents: number;
+  gapResets: number;
+  invalidDtResets: number;
+  sessionResets: number;
+  calibrationErrors: number;
+  estimatorErrors: number;
+  provenanceMismatches: number;
+}
+
+export interface LiveTiltIntegrationMetricsDto {
+  ingressDroppedEvents: number;
+  ingressClosedEvents: number;
+  processedEvents: number;
+}
+
+export interface CalibrationProfileFingerprintDto {
+  version: number;
+  algorithm: string;
+  digest: string;
+}
+
+export interface LiveTiltSnapshotDto {
+  snapshotVersion: number;
+  validity: LiveTiltState;
+  neutralReason: LiveTiltNeutralReason;
+  targetTilt: Tilt2Dto;
+  lastEstimate: AngleEstimateDto | null;
+  activeSessionId: string | null;
+  lastSequence: number | null;
+  lastSampleAgeMs: number | null;
+  yawAvailable: boolean;
+  calibrationProfileFingerprint: CalibrationProfileFingerprintDto | null;
+  policyVersion: number | null;
+  metrics: LiveTiltMetricsDto;
+  lastProcessingError: string | null;
+  integrationMetrics: LiveTiltIntegrationMetricsDto;
+}
+
+export const EMPTY_LIVE_TILT_SNAPSHOT: LiveTiltSnapshotDto = {
+  snapshotVersion: 1,
+  validity: "unavailable",
+  neutralReason: "missing_configuration",
+  targetTilt: { rollRad: 0, pitchRad: 0 },
+  lastEstimate: null,
+  activeSessionId: null,
+  lastSequence: null,
+  lastSampleAgeMs: null,
+  yawAvailable: false,
+  calibrationProfileFingerprint: null,
+  policyVersion: null,
+  metrics: {
+    processedEvents: 0,
+    validOutputs: 0,
+    sequenceGapEvents: 0,
+    estimatedMissingSamples: 0,
+    nonMonotonicSequenceEvents: 0,
+    gapResets: 0,
+    invalidDtResets: 0,
+    sessionResets: 0,
+    calibrationErrors: 0,
+    estimatorErrors: 0,
+    provenanceMismatches: 0,
+  },
+  lastProcessingError: null,
+  integrationMetrics: {
+    ingressDroppedEvents: 0,
+    ingressClosedEvents: 0,
+    processedEvents: 0,
+  },
+};
 
 export interface VisualOffset {
   x: number;
@@ -129,4 +239,39 @@ export function getStatusLabel(status: ReceiverStatus): string {
     case "disconnected":
       return "Aguardando sinal";
   }
+}
+
+export function getLiveTiltStateLabel(state: LiveTiltState): string {
+  switch (state) {
+    case "unavailable":
+      return "Indisponível";
+    case "awaiting_sample":
+      return "Aguardando amostra";
+    case "warming_up":
+      return "Aquecendo";
+    case "valid":
+      return "Válido";
+    case "invalid":
+      return "Inválido";
+    case "stale":
+      return "Sinal desatualizado";
+    case "disconnected":
+      return "Desconectado";
+  }
+}
+
+export function getNeutralReasonLabel(reason: LiveTiltNeutralReason): string {
+  return reason === "none" ? "Nenhum" : reason.replace(/_/g, " ");
+}
+
+export function usableTilt(snapshot: LiveTiltSnapshotDto): Tilt2Dto {
+  return snapshot.validity === "valid"
+    ? snapshot.targetTilt
+    : { rollRad: 0, pitchRad: 0 };
+}
+
+export function shortFingerprint(
+  value: CalibrationProfileFingerprintDto | null | undefined,
+): string {
+  return value ? value.digest.slice(0, 12) : "--";
 }

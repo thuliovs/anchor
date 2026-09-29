@@ -93,6 +93,10 @@ impl LiveMotionPipeline {
         Self::unavailable_with_details(reason, None, None, None)
     }
 
+    pub(crate) fn unavailable_with_runtime_error(reason: NeutralReason, error: String) -> Self {
+        Self::unavailable_with_details(reason, None, None, Some(error))
+    }
+
     fn unavailable_with_details(
         reason: NeutralReason,
         fingerprint: Option<CalibrationProfileFingerprintV1>,

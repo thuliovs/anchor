@@ -7,10 +7,12 @@ import {
   EMPTY_DIAGNOSTIC_ERRORS,
   setEventBridgeError,
   setSnapshotError,
+  setTiltSnapshotError,
   type DiagnosticErrorState,
 } from "./diagnostics-runtime";
 import {
   EMPTY_RECEIVER_SNAPSHOT,
+  EMPTY_LIVE_TILT_SNAPSHOT,
   MOTION_SAMPLE_EVENT,
   RECEIVER_SOURCE_LABEL,
   SNAPSHOT_POLL_INTERVAL_MS,
@@ -20,7 +22,12 @@ import {
   formatText,
   getDisplayedSample,
   getStatusLabel,
+  getLiveTiltStateLabel,
+  getNeutralReasonLabel,
   mapAccelerationToOffset,
+  shortFingerprint,
+  usableTilt,
+  type LiveTiltSnapshotDto,
   type ReceiverSnapshotDto,
 } from "./diagnostics";
 import "./App.css";
@@ -31,6 +38,8 @@ function App() {
   const [snapshot, setSnapshot] =
     useState<ReceiverSnapshotDto>(EMPTY_RECEIVER_SNAPSHOT);
   const [liveSample, setLiveSample] = useState<MotionSampleV1 | null>(null);
+  const [tiltSnapshot, setTiltSnapshot] =
+    useState<LiveTiltSnapshotDto>(EMPTY_LIVE_TILT_SNAPSHOT);
   const [errors, setErrors] =
     useState<DiagnosticErrorState>(EMPTY_DIAGNOSTIC_ERRORS);
 
@@ -44,14 +53,43 @@ function App() {
         schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
         cancel: (handle) => window.clearTimeout(handle),
       },
-      poll: () => invoke<ReceiverSnapshotDto>("get_receiver_snapshot"),
-      onSuccess: (nextSnapshot) => {
+      poll: async () => {
+        const result: {
+          nextReceiverSnapshot?: ReceiverSnapshotDto;
+          nextTiltSnapshot?: LiveTiltSnapshotDto;
+          receiverError: string | null;
+          tiltError: string | null;
+        } = { receiverError: null, tiltError: null };
+        try {
+          result.nextReceiverSnapshot = await invoke<ReceiverSnapshotDto>(
+            "get_receiver_snapshot",
+          );
+        } catch (error) {
+          result.receiverError = `Snapshot indisponível: ${String(error)}`;
+        }
+        try {
+          result.nextTiltSnapshot = await invoke<LiveTiltSnapshotDto>(
+            "get_live_tilt_snapshot",
+          );
+        } catch (error) {
+          result.tiltError = `Tilt processado indisponível: ${String(error)}`;
+        }
+        return result;
+      },
+      onSuccess: ({ nextReceiverSnapshot, nextTiltSnapshot, receiverError, tiltError }) => {
         if (isDisposed) {
           return;
         }
 
-        setSnapshot(nextSnapshot);
-        setErrors((current) => setSnapshotError(current, null));
+        if (nextReceiverSnapshot) {
+          setSnapshot(nextReceiverSnapshot);
+        }
+        if (nextTiltSnapshot) {
+          setTiltSnapshot(nextTiltSnapshot);
+        }
+        setErrors((current) =>
+          setTiltSnapshotError(setSnapshotError(current, receiverError), tiltError),
+        );
       },
       onError: (error) => {
         if (isDisposed) {
@@ -111,6 +149,7 @@ function App() {
     snapshot.lastSample,
   );
   const markerOffset = mapAccelerationToOffset(displayedSample, VISUAL_RADIUS_PX);
+  const targetTilt = usableTilt(tiltSnapshot);
 
   return (
     <main className={`app app--${snapshot.status}`}>
@@ -130,6 +169,9 @@ function App() {
       ) : null}
       {errors.snapshotError ? (
         <p className="bridge-error">{errors.snapshotError}</p>
+      ) : null}
+      {errors.tiltSnapshotError ? (
+        <p className="bridge-error">{errors.tiltSnapshotError}</p>
       ) : null}
 
       <section className="layout-grid">
@@ -153,6 +195,24 @@ function App() {
               }}
             />
           </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel__heading">
+            <h2>Tilt processado</h2>
+            <p>Saída utilizável vem de targetTilt; fora de válido permanece neutra.</p>
+          </div>
+
+          <dl className="data-grid">
+            <div><dt>Estado</dt><dd>{getLiveTiltStateLabel(tiltSnapshot.validity)}</dd></div>
+            <div><dt>Neutralização</dt><dd>{getNeutralReasonLabel(tiltSnapshot.neutralReason)}</dd></div>
+            <div><dt>Roll utilizável</dt><dd>{formatNumber(targetTilt.rollRad, 4)}</dd></div>
+            <div><dt>Pitch utilizável</dt><dd>{formatNumber(targetTilt.pitchRad, 4)}</dd></div>
+            <div><dt>Idade da amostra</dt><dd>{formatAge(tiltSnapshot.lastSampleAgeMs)}</dd></div>
+            <div><dt>Fingerprint</dt><dd>{shortFingerprint(tiltSnapshot.calibrationProfileFingerprint)}</dd></div>
+            <div><dt>Descartes ingresso</dt><dd>{formatNumber(tiltSnapshot.integrationMetrics.ingressDroppedEvents, 0)}</dd></div>
+            <div><dt>Última estimativa (diag.)</dt><dd>{tiltSnapshot.lastEstimate ? `${formatNumber(tiltSnapshot.lastEstimate.rollRad, 4)} / ${formatNumber(tiltSnapshot.lastEstimate.pitchRad, 4)}` : "--"}</dd></div>
+          </dl>
         </article>
 
         <article className="panel">

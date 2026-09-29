@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch, uma selecao offline B3b e um nucleo Rust puro B4a para snapshots seguros de tilt a partir de `AcceptedSampleEvent`. Esse nucleo ainda nao esta ligado ao loop UDP, Tauri, comandos, eventos ou UI.
+Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch, uma selecao offline B3b, um nucleo Rust puro B4a e a integracao diagnostica B4b ao receiver/Tauri/UI.
 
 ## Como executar
 
@@ -45,6 +45,16 @@ pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complemen
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<arquivo>.ndjson --profile artifacts/motion-calibrations/<perfil>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
 ```
+
+Para ativar o diagnostico de tilt processado no desktop, inicie o app com um perfil B2 e uma politica B3b V2 compativeis:
+
+```bash
+ANCHOR_CALIBRATION_PROFILE_PATH=artifacts/motion-calibrations/<perfil>.json \
+ANCHOR_TILT_POLICY_PATH=artifacts/motion-filtering/<politica-v2>.json \
+pnpm dev:desktop
+```
+
+Se qualquer variavel estiver ausente ou invalida, o receiver UDP continua iniciando e a secao “Tilt processado” fica `unavailable` com `targetTilt` neutro.
 
 O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
 
@@ -87,7 +97,7 @@ A B3b adiciona uma camada decisoria separada em `motion_filtering::selection`. E
 
 O contrato `TiltEstimatorPolicyV1` permanece evidencia historica. O contrato `TiltEstimatorPolicyV2` representa a decisao recomendada para ativacao futura pelo nucleo vivo, mas a B3b nao le esse contrato automaticamente nem altera o fluxo UDP/Tauri. `yawAvailable` permanece sempre `false`.
 
-## Nucleo de tilt vivo B4a
+## Nucleo e runtime de tilt vivo B4a/B4b
 
 `live_motion/` implementa o pipeline Rust puro:
 
@@ -97,7 +107,13 @@ AcceptedSampleEvent -> PreparedCalibrationV1 -> estimador B3b V2 -> LiveTiltSnap
 
 Ele e fail-closed: perfil invalido, politica invalida, politica V1, mismatch de fingerprint, gaps temporais, stale/disconnect, sequencia nao monotonia ou erro de estimador mantem `targetTilt` neutro. Somente `valid` entrega tilt utilizavel. Erros invalidantes reconstroem o estimador e exigem novo warm-up de duas amostras antes da recuperacao. `snapshot(now: Instant)` injeta o relogio monotônico; `lastSampleAgeMs` e opcional e fica ausente sem amostra. Nao ha socket, thread, sleep, Tauri ou I/O por amostra.
 
-O fingerprint compartilhado vive em `calibration::provenance`, usado tanto pela selecao B3b quanto pelo runtime B4a. A API publica ativa passa por `LiveMotionPipeline`, evitando construir processador ativo com perfil e politica incompatíveis. `LiveMotionPipeline` e `Send` para compatibilidade futura com estado compartilhado, sem implementar B4b.
+O fingerprint compartilhado vive em `calibration::provenance`, usado tanto pela selecao B3b quanto pelo runtime B4a/B4b. A API publica ativa passa por `LiveMotionPipeline`, evitando construir processador ativo com perfil e politica incompatíveis. `LiveMotionPipeline` e `Send` para compatibilidade com estado compartilhado.
+
+B4b adiciona `live_motion::runtime`, separado do nucleo puro. O receiver envia somente amostras aceitas para um `AcceptedSampleSink`; o sink usa fila bounded (`LIVE_MOTION_INGRESS_CAPACITY = 120`) e `try_send`, portanto o caminho quente UDP nao espera o processamento de tilt nem leitura da UI. Fila cheia ou fechada nao causa panic: incrementa metricas de integracao e deixa gaps posteriores serem tratados pelo comportamento fail-closed.
+
+O comando Tauri `get_live_tilt_snapshot` retorna o snapshot atual e metricas minimas da integracao. A tela mostra “Tilt processado” com estado (`unavailable`, `warming_up`, `valid`, `invalid`, `stale`, `disconnected`), motivo de neutralizacao, roll/pitch utilizaveis, idade da ultima amostra, fingerprint curto e descartes de ingresso. Fora de `valid`, roll e pitch utilizaveis permanecem neutros; `lastEstimate`, quando exibido, e apenas diagnostico.
+
+Nao ha overlay transparente, janela always-on-top/click-through, suavizacao visual adicional, nova validacao fisica, teste em veiculo, alegacao de reducao de cinetose ou medicao formal de latencia ponta a ponta nesta fatia.
 
 Limites iniciais: `100 ms` para gap continuo, duas amostras de warm-up, stale acima de `250 ms` e disconnected acima de `1 s`. Os dois primeiros sao politicas iniciais de engenharia.
 

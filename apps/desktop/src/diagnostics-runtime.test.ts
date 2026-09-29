@@ -7,6 +7,7 @@ import {
   EMPTY_DIAGNOSTIC_ERRORS,
   setEventBridgeError,
   setSnapshotError,
+  setTiltSnapshotError,
   type SchedulerLike,
 } from "./diagnostics-runtime";
 
@@ -240,13 +241,27 @@ test("diagnostic error state keeps event bridge and snapshot failures independen
   assert.deepEqual(withBothErrors, {
     eventBridgeError: "listener failed",
     snapshotError: "snapshot failed",
+    tiltSnapshotError: null,
   });
   assert.deepEqual(clearedSnapshot, {
     eventBridgeError: "listener failed",
     snapshotError: null,
+    tiltSnapshotError: null,
   });
   assert.deepEqual(clearedEvent, {
     eventBridgeError: null,
     snapshotError: "snapshot failed",
+    tiltSnapshotError: null,
   });
+});
+
+test("tilt snapshot errors remain independent from receiver errors", () => {
+  const withReceiver = setSnapshotError(EMPTY_DIAGNOSTIC_ERRORS, "receiver failed");
+  const withBoth = setTiltSnapshotError(withReceiver, "tilt failed");
+  const clearedTilt = setTiltSnapshotError(withBoth, null);
+
+  assert.equal(withBoth.snapshotError, "receiver failed");
+  assert.equal(withBoth.tiltSnapshotError, "tilt failed");
+  assert.equal(clearedTilt.snapshotError, "receiver failed");
+  assert.equal(clearedTilt.tiltSnapshotError, null);
 });

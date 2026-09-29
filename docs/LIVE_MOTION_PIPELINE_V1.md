@@ -1,8 +1,6 @@
 # Live Motion Pipeline V1
 
-B4a introduz um núcleo Rust puro, determinístico e fail-closed para transformar `AcceptedSampleEvent` já aceitos pelo receiver em snapshots observáveis de tilt vivo.
-
-Esta fatia **não** está ligada ao loop UDP, ao startup Tauri, a comandos/eventos Tauri, à UI ou a qualquer task em background.
+B4a introduziu um núcleo Rust puro, determinístico e fail-closed para transformar `AcceptedSampleEvent` já aceitos pelo receiver em snapshots observáveis de tilt vivo. B4b liga esse núcleo ao runtime desktop sem mover socket, I/O ou Tauri para o processador puro.
 
 ## Fluxo
 
@@ -15,6 +13,20 @@ AcceptedSampleEvent
 -> LiveTiltSnapshotV1
 ```
 
+No desktop B4b, o fluxo operacional é:
+
+```text
+datagrama UDP válido
+-> receiver aceita a amostra
+-> AcceptedSampleSink
+-> fila bounded não bloqueante
+-> task LiveMotionPipeline
+-> get_live_tilt_snapshot
+-> seção diagnóstica "Tilt processado"
+```
+
+O sink usa `try_send`; se a fila estiver cheia ou fechada, o receiver não bloqueia e o descarte é contabilizado nas métricas de integração. A capacidade centralizada é `LIVE_MOTION_INGRESS_CAPACITY = 120` eventos.
+
 Saída utilizável só existe em `valid`. Em todos os demais estados, `targetTilt` é neutro `(0, 0)`, embora `lastEstimate` possa permanecer para diagnóstico.
 
 ## Proveniência
@@ -24,6 +36,13 @@ O pipeline exige:
 - perfil B2 válido com `yawCalibrated=false`;
 - política `TiltEstimatorPolicyV2` válida;
 - `calibrationProfileFingerprint` da política igual ao fingerprint do perfil preparado.
+
+No startup desktop, a ativação é explícita pelas variáveis:
+
+- `ANCHOR_CALIBRATION_PROFILE_PATH`;
+- `ANCHOR_TILT_POLICY_PATH`.
+
+As duas precisam estar presentes. Não há busca automática por “mais recente”, geração de política V2 a partir de V1, nem anexação de fingerprint artificial. Perfil ou política inválidos deixam o pipeline `unavailable`, mantêm `targetTilt` neutro e preservam o receiver UDP ativo.
 
 Mismatch neutraliza o pipeline como `unavailable` com motivo `calibration_policy_provenance_mismatch`. Não há fallback e política V1 não ativa o núcleo vivo.
 
@@ -52,8 +71,12 @@ Qualquer erro invalidante neutraliza imediatamente, invalida a continuidade temp
 
 `lastSampleAgeMs` é opcional: `null`/ausente semanticamente significa nenhuma amostra recebida; `0` significa amostra existente com idade inferior a 1 ms ou snapshot com `now` anterior saturado; valores positivos são idade monotônica local.
 
-`LiveMotionPipeline` é `Send` para compatibilidade futura com estado compartilhado, sem introduzir locks, threads ou integração com o receiver nesta fatia.
+`LiveMotionPipeline` é `Send`. A camada runtime B4b adiciona locks, fila e task dedicada fora de `processor.rs`, com encerramento controlado para testes.
 
 ## Métricas
 
 As métricas online cobrem contadores de processamento, resets, gaps, erros e acumuladores online de intervalos de origem, interarrival de recepção e variação `receiveDelta - sourceDelta`. Elas não medem latência ponta a ponta.
+
+## Limites explícitos da B4b
+
+Não há overlay transparente, janela always-on-top/click-through, interpolação visual, nova validação física, alegação de redução de cinetose, teste em veículo ou medição formal de taxa, jitter e latência ponta a ponta.

@@ -2,6 +2,7 @@ pub mod factory;
 pub mod metrics;
 pub mod prepared_calibration;
 pub mod processor;
+pub mod runtime;
 
 pub use crate::calibration::provenance::CalibrationProfileFingerprintV1;
 pub use factory::{EstimatorFactory, FactoryError};
