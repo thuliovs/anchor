@@ -1,4 +1,5 @@
 use crate::{
+    calibration::provenance::CalibrationProfileFingerprintV1,
     dataset::{load_validated_dataset_file, RecordingScenario},
     motion_filtering::{
         evaluate_dataset_file, evaluate_synthetic_suite, report::MetricValue,
@@ -9,8 +10,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 
-pub const SELECTION_REPORT_VERSION: u8 = 1;
+pub const SELECTION_REPORT_VERSION: u8 = 2;
 pub const POLICY_VERSION: u8 = 1;
+pub const POLICY_V2_VERSION: u8 = 2;
 pub const POLICY_SOURCE: &str = "b3b_offline_selection";
 pub const DEFAULT_SELECTION_LOW_PASS_TAU_MS: &[f64] = &[
     25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 400.0, 600.0, 800.0,
@@ -115,6 +117,42 @@ pub struct TiltEstimatorPolicyV1 {
     pub source: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TiltEstimatorPolicyV2 {
+    pub version: u8,
+    pub candidate: PolicyCandidate,
+    pub parameters: BTreeMap<String, f64>,
+    pub yaw_available: bool,
+    pub source: String,
+    pub calibration_profile_fingerprint: CalibrationProfileFingerprintV1,
+}
+
+impl TiltEstimatorPolicyV2 {
+    pub fn validate(&self) -> Result<(), SelectionError> {
+        if self.version != POLICY_V2_VERSION {
+            return Err(SelectionError::Policy(format!(
+                "unsupported policy version: {}",
+                self.version
+            )));
+        }
+        if self.yaw_available {
+            return Err(SelectionError::Policy(
+                "yawAvailable must remain false".to_owned(),
+            ));
+        }
+        if self.source != POLICY_SOURCE {
+            return Err(SelectionError::Policy(format!(
+                "policy source must be {POLICY_SOURCE}"
+            )));
+        }
+        self.calibration_profile_fingerprint
+            .validate()
+            .map_err(|err| SelectionError::Policy(err.to_string()))?;
+        validate_policy_parameters(self.candidate, &self.parameters)
+    }
+}
+
 impl TiltEstimatorPolicyV1 {
     pub fn validate(&self) -> Result<(), SelectionError> {
         if self.version != POLICY_VERSION {
@@ -133,22 +171,7 @@ impl TiltEstimatorPolicyV1 {
                 "policy source must be {POLICY_SOURCE}"
             )));
         }
-        match self.candidate {
-            PolicyCandidate::GravityNoAdditionalAnchorFilter => {
-                if !self.parameters.is_empty() {
-                    return Err(SelectionError::Policy(
-                        "gravity policy must not contain parameters".to_owned(),
-                    ));
-                }
-            }
-            PolicyCandidate::LowPassGravity => {
-                validate_single_parameter(&self.parameters, "tauMs")?
-            }
-            PolicyCandidate::ComplementaryGravityGyro => {
-                validate_single_parameter(&self.parameters, "correctionTauMs")?
-            }
-        }
-        Ok(())
+        validate_policy_parameters(self.candidate, &self.parameters)
     }
 }
 
@@ -219,6 +242,7 @@ pub struct PerformanceConstraint {
 pub struct SelectionInputs {
     pub synthetic_suite: String,
     pub profile: String,
+    pub calibration_profile_fingerprint: CalibrationProfileFingerprintV1,
     pub physical_datasets: Vec<PhysicalDatasetInputReport>,
     pub parameter_grid: SelectionParameterGrid,
     pub mounting_premise: Vec<String>,
@@ -392,7 +416,7 @@ pub struct PhysicalScenarioProxyReport {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectionRecommendation {
-    pub policy: TiltEstimatorPolicyV1,
+    pub policy: TiltEstimatorPolicyV2,
     pub selected_configuration: String,
     pub alternatives_nearby: Vec<String>,
     pub rationale: Vec<String>,
@@ -403,6 +427,10 @@ pub struct SelectionRecommendation {
 
 pub fn select_tilt_estimator(config: SelectionConfig) -> Result<SelectionReport, SelectionError> {
     validate_physical_dataset_metadata(&config.datasets)?;
+    let profile = crate::calibration::load_calibration_profile_file(&config.profile_path)
+        .map_err(EvaluationError::from)?;
+    let calibration_profile_fingerprint = CalibrationProfileFingerprintV1::for_profile(&profile)
+        .map_err(|err| SelectionError::Policy(err.to_string()))?;
 
     let evaluation_config = EvaluationConfig::new(
         config.low_pass_tau_ms.clone(),
@@ -472,7 +500,11 @@ pub fn select_tilt_estimator(config: SelectionConfig) -> Result<SelectionReport,
         .filter(|item| item.eligible && item.dominated_by.is_empty())
         .map(|item| item.id.clone())
         .collect::<Vec<_>>();
-    let recommendation = choose_recommendation(&configurations, &pareto_front)?;
+    let recommendation = choose_recommendation(
+        &configurations,
+        &pareto_front,
+        &calibration_profile_fingerprint,
+    )?;
     let status = if recommendation.is_some() {
         SelectionStatus::Selected
     } else {
@@ -491,6 +523,7 @@ pub fn select_tilt_estimator(config: SelectionConfig) -> Result<SelectionReport,
         inputs: SelectionInputs {
             synthetic_suite: "synthetic-suite-v1".to_owned(),
             profile: safe_basename(&config.profile_path),
+            calibration_profile_fingerprint: calibration_profile_fingerprint.clone(),
             physical_datasets: sorted_datasets
                 .iter()
                 .map(|item| PhysicalDatasetInputReport {
@@ -852,6 +885,7 @@ fn dominance_evidence(
 fn choose_recommendation(
     configurations: &[SelectionConfigurationReport],
     pareto_front: &[String],
+    fingerprint: &CalibrationProfileFingerprintV1,
 ) -> Result<Option<SelectionRecommendation>, SelectionError> {
     let mut candidates = pareto_front
         .iter()
@@ -886,7 +920,7 @@ fn choose_recommendation(
     }
 
     let selected = candidates[0];
-    let policy = policy_from_configuration(selected)?;
+    let policy = policy_from_configuration(selected, fingerprint)?;
     policy.validate()?;
     let alternatives_nearby = pareto_front
         .iter()
@@ -1104,7 +1138,8 @@ fn simplicity_rank(id: &str) -> usize {
 
 fn policy_from_configuration(
     selected: &SelectionConfigurationReport,
-) -> Result<TiltEstimatorPolicyV1, SelectionError> {
+    fingerprint: &CalibrationProfileFingerprintV1,
+) -> Result<TiltEstimatorPolicyV2, SelectionError> {
     let candidate = if selected.id == "gravity_no_additional_anchor_filter" {
         PolicyCandidate::GravityNoAdditionalAnchorFilter
     } else if selected.id.starts_with("low_pass_tau_ms_") {
@@ -1117,12 +1152,13 @@ fn policy_from_configuration(
             selected.id
         )));
     };
-    Ok(TiltEstimatorPolicyV1 {
-        version: POLICY_VERSION,
+    Ok(TiltEstimatorPolicyV2 {
+        version: POLICY_V2_VERSION,
         candidate,
         parameters: selected.parameters.clone(),
         yaw_available: false,
         source: POLICY_SOURCE.to_owned(),
+        calibration_profile_fingerprint: fingerprint.clone(),
     })
 }
 
@@ -1405,6 +1441,26 @@ fn validate_single_parameter(
         Err(SelectionError::Policy(format!(
             "policy parameter {name} must be positive and finite"
         )))
+    }
+}
+
+fn validate_policy_parameters(
+    candidate: PolicyCandidate,
+    parameters: &BTreeMap<String, f64>,
+) -> Result<(), SelectionError> {
+    match candidate {
+        PolicyCandidate::GravityNoAdditionalAnchorFilter => {
+            if !parameters.is_empty() {
+                return Err(SelectionError::Policy(
+                    "gravity policy must not contain parameters".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        PolicyCandidate::LowPassGravity => validate_single_parameter(parameters, "tauMs"),
+        PolicyCandidate::ComplementaryGravityGyro => {
+            validate_single_parameter(parameters, "correctionTauMs")
+        }
     }
 }
 
@@ -1703,9 +1759,17 @@ mod tests {
     }
 
     fn selected_id(configs: &[SelectionConfigurationReport]) -> Option<String> {
-        choose_recommendation(configs, &front(configs))
+        choose_recommendation(configs, &front(configs), &test_fingerprint())
             .unwrap()
             .map(|recommendation| recommendation.selected_configuration)
+    }
+
+    fn test_fingerprint() -> CalibrationProfileFingerprintV1 {
+        CalibrationProfileFingerprintV1 {
+            version: 1,
+            algorithm: "sha256".to_owned(),
+            digest: "0".repeat(64),
+        }
     }
 
     fn with_lag(mut item: SelectionConfigurationReport, lag: f64) -> SelectionConfigurationReport {
@@ -1900,7 +1964,10 @@ mod tests {
 
     #[test]
     fn inconclusive_is_returned_for_empty_or_indistinguishable_candidates() {
-        assert_eq!(choose_recommendation(&[], &[]).unwrap(), None);
+        assert_eq!(
+            choose_recommendation(&[], &[], &test_fingerprint()).unwrap(),
+            None
+        );
         let a = report("complementary_tau_ms_250", 1.0);
         let b = report("complementary_tau_ms_400", 1.0);
         assert_eq!(selected_id(&[a, b]), None);
@@ -1951,6 +2018,7 @@ mod tests {
             inputs: SelectionInputs {
                 synthetic_suite: "synthetic-suite-v1".to_owned(),
                 profile: "profile.json".to_owned(),
+                calibration_profile_fingerprint: test_fingerprint(),
                 physical_datasets: Vec::new(),
                 parameter_grid: SelectionParameterGrid {
                     baseline: "gravity_no_additional_anchor_filter".to_owned(),

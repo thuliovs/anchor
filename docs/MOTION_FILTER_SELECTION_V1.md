@@ -219,3 +219,7 @@ Duas execucoes identicas devem produzir JSON byte a byte identico. Caminhos no r
 ## Relacao B3a -> B3b -> proxima fatia
 
 B3a fornece estimadores, fixtures, metricas e replay. B3b adiciona decisao offline, Pareto, gates e contrato versionado `TiltEstimatorPolicyV1`. A proxima fatia pode consumir essa politica, mas ainda precisa definir comportamento para perda, gaps, stale, jitter e integracao ao receptor ao vivo.
+
+## Status frente à B4a
+
+`TiltEstimatorPolicyV1` permanece como contrato histórico da seleção offline original. Por não conter vínculo criptográfico de consistência com o perfil B2 realmente usado, V1 é inadequada para ativar o núcleo vivo B4a. A B4a introduz `TiltEstimatorPolicyV2` e `selectionReportVersion=2` para novos relatórios, sem migrar V1 silenciosamente.

@@ -17,7 +17,7 @@ A convencao fisica obrigatoria nesta fase e:
 - modo retrato;
 - borda superior apontando para a frente do veiculo.
 
-Esse referencial ainda nao foi calibrado nem verificado empiricamente para todos os cenarios. Os datasets da fase B1 existem justamente para confirmar os sinais reais dos eixos antes da futura operacao de zero/calibracao.
+Esse referencial foi verificado empiricamente nas capturas B1 selecionadas sob a convencao de montagem assumida, mas o protocolo v1 continua carregando amostras brutas no frame do dispositivo. A calibracao B2 e o nucleo B4a vivem no desktop/Rust e nao alteram o contrato UDP `MotionSampleV1`.
 
 ## Unidades
 

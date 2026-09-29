@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch e uma selecao offline B3b para produzir uma politica recomendada versionada quando as evidencias locais estao disponiveis. A aplicacao do perfil e dos filtros ao fluxo ao vivo ainda nao existe.
+Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch, uma selecao offline B3b e um nucleo Rust puro B4a para snapshots seguros de tilt a partir de `AcceptedSampleEvent`. Esse nucleo ainda nao esta ligado ao loop UDP, Tauri, comandos, eventos ou UI.
 
 ## Como executar
 
@@ -83,9 +83,23 @@ Os resultados das capturas fisicas sao proxies comportamentais, nao metricas de 
 
 ## Selecao offline de filtros B3b
 
-A B3b adiciona uma camada decisoria separada em `motion_filtering::selection`. Ela reutiliza a B3a, avalia o grid configuravel de parametros, executa os nove datasets fisicos B1 com o perfil B2, aplica gates estruturais, calcula configuracoes dominadas e fronteira de Pareto com tolerancias fisicas declaradas, e emite `selectionReportVersion = 1`.
+A B3b adiciona uma camada decisoria separada em `motion_filtering::selection`. Ela reutiliza a B3a, avalia o grid configuravel de parametros, executa os nove datasets fisicos B1 com o perfil B2 quando esses artifacts locais existem, aplica gates estruturais, calcula configuracoes dominadas e fronteira de Pareto com tolerancias fisicas declaradas. Novos relatorios usam `selectionReportVersion = 2` e `TiltEstimatorPolicyV2` com fingerprint do perfil B2; V1 permanece historico e nao ativa o nucleo vivo.
 
-O contrato `TiltEstimatorPolicyV1` representa a decisao recomendada para uso futuro pelo receptor, mas a B3b nao le esse contrato automaticamente nem altera o fluxo ao vivo. `yawAvailable` permanece sempre `false`.
+O contrato `TiltEstimatorPolicyV1` permanece evidencia historica. O contrato `TiltEstimatorPolicyV2` representa a decisao recomendada para ativacao futura pelo nucleo vivo, mas a B3b nao le esse contrato automaticamente nem altera o fluxo UDP/Tauri. `yawAvailable` permanece sempre `false`.
+
+## Nucleo de tilt vivo B4a
+
+`live_motion/` implementa o pipeline Rust puro:
+
+```text
+AcceptedSampleEvent -> PreparedCalibrationV1 -> estimador B3b V2 -> LiveTiltSnapshotV1
+```
+
+Ele e fail-closed: perfil invalido, politica invalida, politica V1, mismatch de fingerprint, gaps temporais, stale/disconnect, sequencia nao monotonia ou erro de estimador mantem `targetTilt` neutro. Somente `valid` entrega tilt utilizavel. Erros invalidantes reconstroem o estimador e exigem novo warm-up de duas amostras antes da recuperacao. `snapshot(now: Instant)` injeta o relogio monotônico; `lastSampleAgeMs` e opcional e fica ausente sem amostra. Nao ha socket, thread, sleep, Tauri ou I/O por amostra.
+
+O fingerprint compartilhado vive em `calibration::provenance`, usado tanto pela selecao B3b quanto pelo runtime B4a. A API publica ativa passa por `LiveMotionPipeline`, evitando construir processador ativo com perfil e politica incompatíveis. `LiveMotionPipeline` e `Send` para compatibilidade futura com estado compartilhado, sem implementar B4b.
+
+Limites iniciais: `100 ms` para gap continuo, duas amostras de warm-up, stale acima de `250 ms` e disconnected acima de `1 s`. Os dois primeiros sao politicas iniciais de engenharia.
 
 Metricas de evento no JSON preservam `available`, `failed` ou `unavailable` com unidade e motivo; indisponibilidade aplicavel nao vira `0.0`. Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, `motion:select` retorna erro controlado. As metricas fisicas sao proxies comportamentais, nao acuracia angular. Na execucao real recalculada com as nove capturas locais, a politica recomendada e `gravity_no_additional_anchor_filter` sem parametros; a recomendacao antiga `complementary_tau_ms_400` nao e preservada.
 
@@ -192,6 +206,13 @@ apps/desktop/src-tauri/src/
 ├── dataset/
 │   └── mod.rs
 ├── lib.rs
+├── live_motion/
+│   ├── factory.rs
+│   ├── metrics.rs
+│   ├── mod.rs
+│   ├── prepared_calibration.rs
+│   ├── processor.rs
+│   └── provenance.rs
 ├── main.rs
 ├── motion_filtering/
 │   ├── estimator.rs

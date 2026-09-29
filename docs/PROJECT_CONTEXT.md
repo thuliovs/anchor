@@ -20,9 +20,9 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
 5. o frontend Tauri exibe os dados e métricas em tempo real;
-6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch e executar uma seleção offline B3b, ainda sem aplicação ao fluxo ao vivo.
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e possui um núcleo Rust puro B4a para processar tilt vivo a partir de `AcceptedSampleEvent`, ainda sem ligação ao UDP/Tauri/UI.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável e camada B3b para seleção offline auditável. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável, camada B3b para seleção offline auditável e núcleo B4a Rust puro para snapshots seguros de tilt. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -135,7 +135,7 @@ O JSON Schema em `packages/protocol/schema/motion-sample.v1.schema.json` é a es
 - Y positivo: frente do veículo;
 - Z positivo: cima.
 
-O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Esse referencial ainda não foi calibrado; ele é apenas a hipótese operacional atual de montagem. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 introduz datasets controlados para confirmar empiricamente os sinais reais dos eixos antes da futura operação de zero/calibração.
+O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Esse referencial é a hipótese operacional atual de montagem para o protocolo bruto. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 registrou datasets controlados que confirmaram empiricamente os sinais reais dos eixos sob essa convenção; a calibração B2 e o núcleo B4a permanecem camadas desktop sobre o protocolo v1 bruto.
 
 ### Regras de transporte
 
@@ -329,6 +329,26 @@ Limitações deliberadas:
 - não distingue inclinação do suporte, do veículo e do piso/estrada no instante do zero;
 - ainda não aplica o perfil ao receptor ao vivo nem à UI.
 
+### Núcleo seguro de tilt vivo B4a
+
+O desktop possui `apps/desktop/src-tauri/src/live_motion/`, um núcleo Rust puro e determinístico que prepara um perfil B2 validado, verifica uma política B3b V2 vinculada por fingerprint, instancia um dos três estimadores existentes e produz `LiveTiltSnapshotV1` a partir de `AcceptedSampleEvent`.
+
+Características:
+
+- sem I/O, socket, Tauri, threads, tasks ou consulta interna a relógio real;
+- `snapshot(now: Instant)` recebe relógio monotônico injetado;
+- política V1 permanece histórica e não ativa o núcleo vivo;
+- mismatch de fingerprint gera `unavailable` com alvo neutro;
+- a API pública ativa passa por `LiveMotionPipeline`, sem construtor público que permita contornar a proveniência;
+- erro invalidante reconstrói o estimador e exige novo warm-up antes de voltar a `valid`;
+- `lastSampleAgeMs` é opcional e fica ausente quando nenhuma amostra foi recebida;
+- `LiveMotionPipeline` é `Send` para compatibilidade futura com estado compartilhado;
+- `yawAvailable=false` sempre;
+- somente estado `valid` entrega `targetTilt` diferente de zero;
+- limites iniciais: gap contínuo máximo de `100 ms`, warm-up de duas amostras, stale acima de `250 ms`, disconnected acima de `1 s`.
+
+Os limites de `100 ms` e duas amostras são políticas iniciais de engenharia, não limites clínicos. As métricas temporais online medem intervalos de origem, interarrival de recepção e variação relativa; não são latência ponta a ponta.
+
 ### Avaliacao offline de filtros B3a
 
 O desktop possui um modulo Rust dedicado em `apps/desktop/src-tauri/src/motion_filtering/` para avaliar offline estimadores de roll/pitch sobre sinais calibrados.
@@ -369,11 +389,11 @@ Caracteristicas da B3b:
 - aplica gates estruturais, identifica configuracoes dominadas e calcula fronteira de Pareto com tolerancias fisicas declaradas;
 - preserva metricas de evento como `available`, `failed` ou `unavailable`, sem converter indisponibilidade aplicavel em zero;
 - usa as capturas fisicas apenas como proxies comportamentais, com `stationary` participando somente como proxy tardio de repouso;
-- emite JSON `selectionReportVersion = 1` e relatorio humano deterministico;
-- define o contrato Rust `TiltEstimatorPolicyV1`, validado, com `yawAvailable=false` e `source=b3b_offline_selection`;
+- emite novos JSONs `selectionReportVersion = 2` e relatorio humano deterministico com fingerprint do perfil;
+- preserva `TiltEstimatorPolicyV1` como historico e define `TiltEstimatorPolicyV2`, validado, com `yawAvailable=false`, `source=b3b_offline_selection` e `calibrationProfileFingerprint`;
 - nao aplica a politica ao receptor ao vivo.
 
-Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Na execucao real B3b recalculada com as nove capturas e o perfil B2 selecionado, a politica recomendada foi `gravity_no_additional_anchor_filter` com parametros vazios, `yawAvailable = false` e `source = b3b_offline_selection`. A recomendacao anterior `complementary_tau_ms_400` nao e preservada por compatibilidade.
+Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Na execucao real B3b historica recalculada com as nove capturas e o perfil B2 selecionado, a politica V1 recomendada foi `gravity_no_additional_anchor_filter` com parametros vazios, `yawAvailable = false` e `source = b3b_offline_selection`. Essa evidencia permanece historica; nao houve nova execucao fisica para gerar relatorio V2 nesta fatia.
 
 ## 9. Simulador de movimento
 
@@ -592,8 +612,8 @@ cd apps/mobile/android
 
 - horizonte artificial/overlay final;
 - janela transparente, always-on-top e click-through;
-- modelo de movimento, orientação ou fusão de sensores destinado ao visual ao vivo;
-- aplicação da calibração ao fluxo ao vivo;
+- integração do modelo de tilt vivo ao receptor UDP, Tauri, UI ou overlay;
+- aplicação da calibração ao fluxo UDP/Tauri em execução;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
 - medição formal de latência ponta a ponta e jitter;
@@ -655,10 +675,10 @@ Concluída em 2 de setembro de 2026.
 2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
 3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
 4. Concluido na fatia B3b: implementar selecao offline, Pareto, contrato de politica e documentacao para definir candidato/parametros quando as nove capturas fisicas estiverem disponiveis localmente. A aplicacao ao receptor ao vivo permanece fora de escopo.
-5. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
+5. Concluído na fatia B4a em núcleo Rust puro: definir como o processador vivo reage a pacote perdido, gaps, stale e disconnect, ainda sem integrar ao receptor/UDP/Tauri.
 6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
 
-As fatias B1, B2, B3a e B3b estão concluídas em código e documentação. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de aplicação ao vivo, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
+As fatias B1, B2, B3a, B3b e B4a estão concluídas em código e documentação. A B4a teve formatação, testes Rust e Clippy executados com sucesso, mas seu núcleo continua isolado, sem conexão ao receiver/UDP/Tauri/UI. Não houve nova validação física; o teste físico B3b dependente dos artefatos locais B1/B2 permanece ignorado. A Fase B inteira ainda permanece em aberto por causa da integração ao vivo e da medição formal de taxa, interarrival, jitter e aproximação defensável de latência.
 
 ### Fase C — Primeiro overlay experimental
 

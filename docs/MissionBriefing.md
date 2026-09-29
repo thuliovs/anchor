@@ -1,5 +1,7 @@
 ### 🚀 Project Anchor: Domando o Horizonte Digital
 
+> Nota histórica: este briefing preserva a visão original do produto. Expressões como “curar” ou “eliminar enjoo” descrevem aspiração criativa, não alegação clínica demonstrada.
+
 **O Desafio: Cinetose (Motion Sickness)** Milhares de pessoas tentam ser produtivas enquanto viajam (em carros, ônibus ou trens), mas são impedidas por uma barreira biológica: o enjoo de movimento.
 
 Isso acontece devido a uma dissonância sensorial:

@@ -4,7 +4,7 @@ use anchor_desktop_lib::{
     motion_filtering::{
         selection::{
             format_human_selection, select_tilt_estimator, PhysicalDatasetSelectionInput,
-            SelectionConfig, SelectionStatus, TiltEstimatorPolicyV1,
+            SelectionConfig, SelectionStatus, TiltEstimatorPolicyV1, TiltEstimatorPolicyV2,
             DEFAULT_SELECTION_COMPLEMENTARY_TAU_MS, DEFAULT_SELECTION_LOW_PASS_TAU_MS,
         },
         EvaluationConfig, EVALUATION_REPORT_VERSION,
@@ -71,7 +71,7 @@ fn selection_report_is_deterministic_and_contract_safe() {
     .expect("config");
     let first = select_tilt_estimator(config.clone()).expect("first selection");
     let second = select_tilt_estimator(config).expect("second selection");
-    assert_eq!(first.selection_report_version, 1);
+    assert_eq!(first.selection_report_version, 2);
     assert_eq!(first.status, SelectionStatus::Inconclusive);
     assert_eq!(
         serde_json::to_string_pretty(&first).unwrap(),
@@ -82,6 +82,7 @@ fn selection_report_is_deterministic_and_contract_safe() {
     assert!(!json.contains("Infinity"));
     assert!(!json.contains(fixture.root.to_str().unwrap()));
     assert!(json.contains("selectionReportVersion"));
+    assert!(json.contains("calibrationProfileFingerprint"));
     assert!(json.contains("groundTruthAvailable"));
     assert!(json.contains("paretoFront"));
     assert!(format_human_selection(&first).contains("physical metrics are proxies only"));
@@ -164,7 +165,7 @@ fn cli_select_json_human_and_error_paths_work() {
     );
     assert!(String::from_utf8(human.stdout)
         .unwrap()
-        .contains("Anchor Motion Filter Selection v1"));
+        .contains("Anchor Motion Filter Selection v2"));
 
     let mut json_args = args.clone();
     json_args.push("--json".to_owned());
@@ -175,7 +176,8 @@ fn cli_select_json_human_and_error_paths_work() {
         String::from_utf8_lossy(&json.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&json.stdout).expect("clean json");
-    assert_eq!(value["selectionReportVersion"], serde_json::json!(1));
+    assert_eq!(value["selectionReportVersion"], serde_json::json!(2));
+    assert!(value["inputs"]["calibrationProfileFingerprint"]["digest"].is_string());
 
     let duplicate = run_cli(&[
         "select",
@@ -230,6 +232,85 @@ fn policy_json_rejects_unknown_fields_version_and_invalid_parameters() {
         .parameters
         .insert("correctionTauMs".to_owned(), 0.0);
     assert!(bad_parameter.validate().is_err());
+
+    let valid_v2 = serde_json::json!({
+        "version": 2,
+        "candidate": "gravity_no_additional_anchor_filter",
+        "parameters": {},
+        "yawAvailable": false,
+        "source": "b3b_offline_selection",
+        "calibrationProfileFingerprint": {
+            "version": 1,
+            "algorithm": "sha256",
+            "digest": "0".repeat(64)
+        }
+    });
+    let policy_v2: TiltEstimatorPolicyV2 = serde_json::from_value(valid_v2).expect("policy v2");
+    policy_v2.validate().expect("valid v2");
+
+    let mut invalid_version = policy_v2.clone();
+    invalid_version.version = 3;
+    assert!(invalid_version.validate().is_err());
+
+    let mut invalid_algorithm = policy_v2.clone();
+    invalid_algorithm.calibration_profile_fingerprint.algorithm = "sha512".to_owned();
+    assert!(invalid_algorithm.validate().is_err());
+
+    let mut invalid_digest = policy_v2.clone();
+    invalid_digest.calibration_profile_fingerprint.digest = "ABC".to_owned();
+    assert!(invalid_digest.validate().is_err());
+
+    let unknown_v2 = serde_json::json!({
+        "version": 2,
+        "candidate": "gravity_no_additional_anchor_filter",
+        "parameters": {},
+        "yawAvailable": false,
+        "source": "b3b_offline_selection",
+        "calibrationProfileFingerprint": {
+            "version": 1,
+            "algorithm": "sha256",
+            "digest": "0".repeat(64)
+        },
+        "unexpected": true
+    });
+    assert!(serde_json::from_value::<TiltEstimatorPolicyV2>(unknown_v2).is_err());
+
+    let mut yaw = policy_v2.clone();
+    yaw.yaw_available = true;
+    assert!(yaw.validate().is_err());
+
+    let mut source = policy_v2.clone();
+    source.source = "manual".to_owned();
+    assert!(source.validate().is_err());
+
+    for bad_value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let mut parameters = std::collections::BTreeMap::new();
+        parameters.insert("tauMs".to_owned(), bad_value);
+        let bad = TiltEstimatorPolicyV2 {
+            candidate:
+                anchor_desktop_lib::motion_filtering::selection::PolicyCandidate::LowPassGravity,
+            parameters,
+            ..policy_v2.clone()
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    let missing_param = TiltEstimatorPolicyV2 {
+        candidate: anchor_desktop_lib::motion_filtering::selection::PolicyCandidate::LowPassGravity,
+        parameters: std::collections::BTreeMap::new(),
+        ..policy_v2.clone()
+    };
+    assert!(missing_param.validate().is_err());
+
+    let mut extra_params = std::collections::BTreeMap::new();
+    extra_params.insert("tauMs".to_owned(), 25.0);
+    extra_params.insert("extra".to_owned(), 1.0);
+    let extra_param = TiltEstimatorPolicyV2 {
+        candidate: anchor_desktop_lib::motion_filtering::selection::PolicyCandidate::LowPassGravity,
+        parameters: extra_params,
+        ..policy_v2
+    };
+    assert!(extra_param.validate().is_err());
 }
 
 #[test]
@@ -284,7 +365,7 @@ fn real_b3b_selection_with_nine_physical_captures() {
         .expect("real config"),
     )
     .expect("real selection");
-    assert_eq!(report.selection_report_version, 1);
+    assert_eq!(report.selection_report_version, 2);
 }
 
 struct SelectionFixture {
