@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 2 de setembro de 2026
-> **Estado:** plataforma de diagnóstico validada em hardware real; variante Android standalone interna automatizada, construída, instalada e validada fisicamente sem Metro e sem `adb reverse`
+> **Snapshot de referência:** 20 de outubro de 2026
+> **Estado:** plataforma de diagnóstico validada em hardware real; B4b integrada e validada fisicamente em Windows com Android standalone e desktop Tauri
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -135,7 +135,7 @@ O JSON Schema em `packages/protocol/schema/motion-sample.v1.schema.json` é a es
 - Y positivo: frente do veículo;
 - Z positivo: cima.
 
-O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Esse referencial é a hipótese operacional atual de montagem para o protocolo bruto. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 registrou datasets controlados que confirmaram empiricamente os sinais reais dos eixos sob essa convenção; a calibração B2 e o núcleo B4a permanecem camadas desktop sobre o protocolo v1 bruto.
+O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo, documentado nas capturas regeneradas como `flat_screen_up_portrait_top_toward_vehicle_front`. Esse referencial é a hipótese operacional atual de montagem para o protocolo bruto. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 registrou datasets controlados que confirmaram empiricamente os sinais reais dos eixos sob essa convenção; a calibração B2 e o pipeline B4a/B4b permanecem camadas desktop sobre o protocolo v1 bruto.
 
 ### Regras de transporte
 
@@ -247,7 +247,7 @@ Nesta data, a implementação automatizada da variante standalone existe, o APK 
 - Rust/Tokio para rede e estado;
 - React/TypeScript para diagnóstico;
 - tray icon já existente;
-- desenvolvimento e teste físico atual realizados em Linux.
+- desenvolvimento e testes físicos realizados em Linux; a integração B4b também foi validada em Windows.
 
 ### Receptor UDP
 
@@ -327,7 +327,7 @@ Limitações deliberadas:
 - não infere direção por movimento;
 - produz um `leveled mounting frame`, não um referencial completo do veículo;
 - não distingue inclinação do suporte, do veículo e do piso/estrada no instante do zero;
-- ainda não aplica o perfil ao receptor ao vivo nem à UI.
+- a aplicação viva do perfil é feita somente pelo runtime B4b configurado explicitamente; ela não altera o protocolo nem transforma o perfil em referencial completo do veículo.
 
 ### Núcleo seguro de tilt vivo B4a
 
@@ -351,9 +351,9 @@ Os limites de `100 ms` e duas amostras são políticas iniciais de engenharia, n
 
 ### Integração diagnóstica de tilt vivo B4b
 
-B4b adiciona uma camada runtime separada em `live_motion::runtime`: carrega explicitamente `ANCHOR_CALIBRATION_PROFILE_PATH` e `ANCHOR_TILT_POLICY_PATH`, cria o `LiveMotionPipeline`, recebe somente `AcceptedSampleEvent` publicados pelo receiver, usa fila bounded com `try_send` e processa eventos em uma task dedicada. Configuração ausente ou inválida deixa o pipeline `unavailable` e `targetTilt` neutro, sem impedir o receiver UDP de iniciar.
+B4b adiciona uma camada runtime separada em `live_motion::runtime`: carrega explicitamente `ANCHOR_CALIBRATION_PROFILE_PATH` e `ANCHOR_TILT_POLICY_PATH`, cria o `LiveMotionPipeline`, recebe somente `AcceptedSampleEvent` publicados pelo receiver, usa fila bounded com `try_send` e processa eventos em um worker dedicado. Configuração ausente ou inválida deixa o pipeline `unavailable` e `targetTilt` neutro, sem impedir o receiver UDP de iniciar.
 
-O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. Não há overlay, janela transparente, click-through, nova validação física ou medição formal de latência ponta a ponta nesta fatia.
+O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. A integração foi validada fisicamente; continuam fora de escopo overlay, janela transparente, click-through e medição formal de latência ponta a ponta.
 
 ### Avaliacao offline de filtros B3a
 
@@ -397,9 +397,9 @@ Caracteristicas da B3b:
 - usa as capturas fisicas apenas como proxies comportamentais, com `stationary` participando somente como proxy tardio de repouso;
 - emite novos JSONs `selectionReportVersion = 2` e relatorio humano deterministico com fingerprint do perfil;
 - preserva `TiltEstimatorPolicyV1` como historico e define `TiltEstimatorPolicyV2`, validado, com `yawAvailable=false`, `source=b3b_offline_selection` e `calibrationProfileFingerprint`;
-- nao aplica a politica ao receptor ao vivo.
+- produz a política que B4b consome somente quando perfil e fingerprint compatíveis são configurados explicitamente.
 
-Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Na execucao real B3b historica recalculada com as nove capturas e o perfil B2 selecionado, a politica V1 recomendada foi `gravity_no_additional_anchor_filter` com parametros vazios, `yawAvailable = false` e `source = b3b_offline_selection`. Essa evidencia permanece historica; nao houve nova execucao fisica para gerar relatorio V2 nesta fatia.
+Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Em 1 de outubro de 2026, a seleção física B3b V2 foi executada localmente com as nove capturas B1 regeneradas e o perfil B2 aprovado. Ela escolheu `gravity_no_additional_anchor_filter`, sem parâmetros adicionais, com `yawAvailable = false` e fingerprint `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
 
 ## 9. Simulador de movimento
 
@@ -429,8 +429,8 @@ Em 25 de agosto de 2026, a primeira fatia vertical foi validada com um celular A
 
 ### Evidência observada
 
-- destino configurado no mobile: `192.168.1.209:57421`;
-- remetente visto pelo desktop: `192.168.1.225:54996`;
+- destino configurado manualmente no mobile para o receptor local;
+- remetente observado pelo desktop na mesma rede local;
 - status mobile: ativo;
 - status desktop: ativo;
 - sensores linear, gravity e gyro: disponíveis;
@@ -521,6 +521,24 @@ Os sinais opostos posteriores nas capturas de yaw e deslocamento correspondem à
 
 Essa validação sustenta a hipótese operacional atual dos eixos sob a convenção de montagem assumida, mas não constitui um referencial calibrado. Calibração/zero, filtros, fusão, correção de movimento e overlay continuam fora da B1.
 
+### Atualização física B1/B2/B3b — 1 de outubro de 2026
+
+Os nove cenários físicos B1 foram regenerados localmente com o mesmo celular e a convenção de montagem `flat_screen_up_portrait_top_toward_vehicle_front`. As capturas selecionadas ficaram próximas de `60 Hz`, tiveram uma única sessão por captura e não registraram descartes do gravador.
+
+O perfil estacionário B2 correspondente passou no gate de qualidade sem violações. Com esse perfil, a seleção física B3b V2 foi executada sobre os nove cenários e escolheu `gravity_no_additional_anchor_filter`, sem parâmetros adicionais, com `yawAvailable = false` e fingerprint do perfil B2 `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
+
+Esses resultados físicos continuam sendo evidência operacional e métricas proxy comportamentais; não estabelecem acurácia angular real.
+
+### Validação física da integração B4b — 20 de outubro de 2026
+
+A integração B4b foi validada fisicamente em Windows com o APK Android standalone e o desktop Tauri. Sem configuração de perfil e política, o receiver permaneceu ativo, enquanto o tilt ficou `unavailable` com `missing_configuration` e saída utilizável neutra, confirmando o comportamento fail-closed.
+
+Com perfil B2 e política V2 compatíveis, o pipeline chegou a `valid`, com neutralização `none`, fingerprint correto e zero descartes de ingresso. Roll respondeu de forma estável nos dois sentidos, aproximadamente `+1` e `-1 rad`. Pitch também foi validado nos dois sentidos: borda superior inclinada para baixo produziu pitch positivo, borda superior inclinada para cima produziu pitch negativo, e o estado permaneceu válido.
+
+Ao interromper a transmissão, o estado passou para `disconnected` em aproximadamente `1 s`; `targetTilt` e os valores utilizáveis de roll/pitch voltaram a zero, enquanto a última estimativa ficou somente como diagnóstico. Ao reiniciar, uma nova sessão foi aceita, o pipeline recuperou para `valid`, a neutralização voltou a `none` e roll/pitch retomaram resposta.
+
+Na observação final, o receiver registrou `22856` datagramas recebidos e `22856` amostras aceitas, com zero oversized, inválidos, duplicados/fora de ordem, sessão estrangeira, rate limited e descartes de ingresso. Foram observadas idades locais de amostra de poucos milissegundos; isso não é medição de latência ponta a ponta.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -532,6 +550,9 @@ Essa validação sustenta a hipótese operacional atual dos eixos sob a convenç
 | `937b91ea` | pipeline nativo de sensores Android |
 | `99c142d0` | streaming Android → desktop por UDP |
 | `039e1ddc` | bundle Metro compatível com monorepo pnpm |
+| `e6a8ed8b` | núcleo de tilt vivo fail-closed B4a |
+| `d7bb1c92` | integração diagnóstica B4b ao receiver, Tauri e UI |
+| `97234fdd` | inicialização confiável do runtime de tilt vivo |
 
 ## 12. Comandos operacionais
 
@@ -618,8 +639,6 @@ cd apps/mobile/android
 
 - horizonte artificial/overlay final;
 - janela transparente, always-on-top e click-through;
-- integração do modelo de tilt vivo ao receptor UDP, Tauri, UI ou overlay;
-- aplicação da calibração ao fluxo UDP/Tauri em execução;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
 - medição formal de latência ponta a ponta e jitter;
@@ -630,7 +649,7 @@ cd apps/mobile/android
 - reconexão automática;
 - transporte USB de dados do produto;
 - app iOS;
-- empacotamento e validação Windows;
+- empacotamento Windows e validação nas demais plataformas de janela;
 - autostart, configuração completa do tray e gestão de firewall;
 - estudos em veículo e validação de eficácia contra cinetose.
 
@@ -646,7 +665,7 @@ Uma visualização atrasada, instável ou com movimento errado pode ser inútil 
 
 ### Referencial e montagem
 
-O referencial atual depende de uma orientação física obrigatória. A fatia B2 implementou e validou fisicamente uma operação offline de calibração/zero que produz um `leveled mounting frame` corrigindo roll e pitch, mas yaw continua indeterminado. Na prática, veículos, suportes e usuários variarão; a aplicação desse perfil ao fluxo ao vivo e futuras estratégias de montagem permanecem trabalhos separados.
+O referencial atual depende de uma orientação física obrigatória. A fatia B2 implementou e validou fisicamente uma operação offline de calibração/zero que produz um `leveled mounting frame` corrigindo roll e pitch, mas yaw continua indeterminado. B4b aplica esse perfil no diagnóstico vivo quando a política V2 compatível é configurada; veículos, suportes, usuários e futuras estratégias de montagem continuam sendo trabalhos separados.
 
 ### Modelo visual
 
@@ -662,7 +681,7 @@ O stream deliberadamente não confirma entrega. Um futuro canal de controle pode
 
 ### Portabilidade
 
-O objetivo inclui Windows e Linux, mas a validação física atual cobre Android + Linux. Transparência e click-through variam entre Windows, X11 e Wayland e precisam de protótipos por plataforma.
+O objetivo inclui Windows e Linux. A validação física cobre Android + Linux no fluxo anterior e Android standalone + Windows na integração B4b; transparência e click-through variam entre Windows, X11 e Wayland e precisam de protótipos por plataforma.
 
 ## 15. Próximas fases recomendadas
 
@@ -678,13 +697,13 @@ Concluída em 2 de setembro de 2026.
 ### Fase B — Dados e modelo de movimento
 
 1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
-2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
+2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`.
 3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
-4. Concluido na fatia B3b: implementar selecao offline, Pareto, contrato de politica e documentacao para definir candidato/parametros quando as nove capturas fisicas estiverem disponiveis localmente. A aplicacao ao receptor ao vivo permanece fora de escopo.
-5. Concluído na fatia B4a em núcleo Rust puro: definir como o processador vivo reage a pacote perdido, gaps, stale e disconnect, ainda sem integrar ao receptor/UDP/Tauri.
-6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+4. Concluído na fatia B3b: executar seleção offline V2 com as nove capturas físicas regeneradas e produzir política vinculada ao perfil B2.
+5. Concluído nas fatias B4a e B4b: definir o processamento vivo fail-closed, integrá-lo ao receiver/desktop e validá-lo fisicamente.
+6. Medir formalmente taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
 
-As fatias B1, B2, B3a, B3b e B4a estão concluídas em código e documentação. A B4a teve formatação, testes Rust e Clippy executados com sucesso, mas seu núcleo continua isolado, sem conexão ao receiver/UDP/Tauri/UI. Não houve nova validação física; o teste físico B3b dependente dos artefatos locais B1/B2 permanece ignorado. A Fase B inteira ainda permanece em aberto por causa da integração ao vivo e da medição formal de taxa, interarrival, jitter e aproximação defensável de latência.
+As fatias B1, B2, B3a, B3b, B4a e B4b estão implementadas; B4b foi validada fisicamente. A Fase B permanece aberta exclusivamente pela medição formal de taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta. A Fase C ainda não começou.
 
 ### Fase C — Primeiro overlay experimental
 

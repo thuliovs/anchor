@@ -77,7 +77,7 @@ Limitacoes deliberadas da v1:
 - o resultado e um `leveled mounting frame`, nao um referencial completo do veiculo;
 - a operacao nao distingue inclinacao do suporte, do veiculo e do piso/estrada no instante do zero.
 
-Por enquanto, o perfil serve apenas para operacao offline e testes. O receptor, o analyzer B1, o protocolo e o fluxo standalone existente permanecem inalterados.
+O perfil é produzido offline, mas B4b o aplica ao diagnóstico vivo quando o desktop recebe uma política V2 compatível pelo caminho de configuração explícito. O receptor, o analyzer B1 e o protocolo permanecem inalterados.
 
 ## Avaliacao offline de filtros B3a
 
@@ -95,7 +95,7 @@ Os resultados das capturas fisicas sao proxies comportamentais, nao metricas de 
 
 A B3b adiciona uma camada decisoria separada em `motion_filtering::selection`. Ela reutiliza a B3a, avalia o grid configuravel de parametros, executa os nove datasets fisicos B1 com o perfil B2 quando esses artifacts locais existem, aplica gates estruturais, calcula configuracoes dominadas e fronteira de Pareto com tolerancias fisicas declaradas. Novos relatorios usam `selectionReportVersion = 2` e `TiltEstimatorPolicyV2` com fingerprint do perfil B2; V1 permanece historico e nao ativa o nucleo vivo.
 
-O contrato `TiltEstimatorPolicyV1` permanece evidencia historica. O contrato `TiltEstimatorPolicyV2` representa a decisao recomendada para ativacao futura pelo nucleo vivo, mas a B3b nao le esse contrato automaticamente nem altera o fluxo UDP/Tauri. `yawAvailable` permanece sempre `false`.
+O contrato `TiltEstimatorPolicyV1` permanece evidencia historica. O contrato `TiltEstimatorPolicyV2` representa a decisao recomendada consumida por B4b somente quando configurada explicitamente com perfil de fingerprint compativel; a B3b nao altera o protocolo UDP/Tauri. `yawAvailable` permanece sempre `false`.
 
 ## Nucleo e runtime de tilt vivo B4a/B4b
 
@@ -113,11 +113,15 @@ B4b adiciona `live_motion::runtime`, separado do nucleo puro. O receiver envia s
 
 O comando Tauri `get_live_tilt_snapshot` retorna o snapshot atual e metricas minimas da integracao. A tela mostra “Tilt processado” com estado (`unavailable`, `warming_up`, `valid`, `invalid`, `stale`, `disconnected`), motivo de neutralizacao, roll/pitch utilizaveis, idade da ultima amostra, fingerprint curto e descartes de ingresso. Fora de `valid`, roll e pitch utilizaveis permanecem neutros; `lastEstimate`, quando exibido, e apenas diagnostico.
 
-Nao ha overlay transparente, janela always-on-top/click-through, suavizacao visual adicional, nova validacao fisica, teste em veiculo, alegacao de reducao de cinetose ou medicao formal de latencia ponta a ponta nesta fatia.
+Em 20 de outubro de 2026, B4b foi validada fisicamente em Windows com APK Android standalone e desktop Tauri. Sem configuracao, o receiver permaneceu ativo e a saida ficou neutra em `unavailable`/`missing_configuration`. Com perfil B2 e politica V2 compativeis, o pipeline chegou a `valid` com neutralizacao `none`, fingerprint correto e zero descartes de ingresso. Roll respondeu nos dois sentidos aproximadamente a `+1` e `-1 rad`; pitch foi positivo com a borda superior para baixo e negativo com a borda superior para cima.
+
+Ao interromper a transmissao, o pipeline chegou a `disconnected` em aproximadamente `1 s`, neutralizando a saida utilizavel e preservando somente a ultima estimativa diagnostica. Uma nova sessao recuperou para `valid`. Na observacao final, houve `22856` datagramas recebidos e `22856` amostras aceitas, sem rejeicoes do receiver nem descartes de ingresso. Idades locais de poucos milissegundos observadas no snapshot nao sao latencia ponta a ponta.
+
+Nao ha overlay transparente, janela always-on-top/click-through, suavizacao visual adicional, teste em veiculo, alegacao de reducao de cinetose ou medicao formal de taxa, jitter e latencia ponta a ponta nesta fatia.
 
 Limites iniciais: `100 ms` para gap continuo, duas amostras de warm-up, stale acima de `250 ms` e disconnected acima de `1 s`. Os dois primeiros sao politicas iniciais de engenharia.
 
-Metricas de evento no JSON preservam `available`, `failed` ou `unavailable` com unidade e motivo; indisponibilidade aplicavel nao vira `0.0`. Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, `motion:select` retorna erro controlado. As metricas fisicas sao proxies comportamentais, nao acuracia angular. Na execucao real recalculada com as nove capturas locais, a politica recomendada e `gravity_no_additional_anchor_filter` sem parametros; a recomendacao antiga `complementary_tau_ms_400` nao e preservada.
+Metricas de evento no JSON preservam `available`, `failed` ou `unavailable` com unidade e motivo; indisponibilidade aplicavel nao vira `0.0`. Os nove cenarios B1 foram regenerados localmente em 1 de outubro de 2026, com o mesmo celular, a convencao `flat_screen_up_portrait_top_toward_vehicle_front`, uma sessao por captura, taxas proximas de `60 Hz` e sem descartes do gravador. O perfil B2 passou no gate sem violacoes, e a selecao fisica B3b V2 escolheu `gravity_no_additional_anchor_filter` sem parametros, `yawAvailable=false` e fingerprint `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`. As metricas fisicas continuam proxies comportamentais, nao acuracia angular. Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, `motion:select` retorna erro controlado.
 
 ## Endereco e porta padrao
 

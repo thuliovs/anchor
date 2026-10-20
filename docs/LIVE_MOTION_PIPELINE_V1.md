@@ -20,7 +20,7 @@ datagrama UDP válido
 -> receiver aceita a amostra
 -> AcceptedSampleSink
 -> fila bounded não bloqueante
--> task LiveMotionPipeline
+-> worker LiveMotionPipeline
 -> get_live_tilt_snapshot
 -> seção diagnóstica "Tilt processado"
 ```
@@ -71,12 +71,20 @@ Qualquer erro invalidante neutraliza imediatamente, invalida a continuidade temp
 
 `lastSampleAgeMs` é opcional: `null`/ausente semanticamente significa nenhuma amostra recebida; `0` significa amostra existente com idade inferior a 1 ms ou snapshot com `now` anterior saturado; valores positivos são idade monotônica local.
 
-`LiveMotionPipeline` é `Send`. A camada runtime B4b adiciona locks, fila e task dedicada fora de `processor.rs`, com encerramento controlado para testes.
+`LiveMotionPipeline` é `Send`. A camada runtime B4b adiciona locks, fila e worker dedicado fora de `processor.rs`, com encerramento controlado para testes.
 
 ## Métricas
 
 As métricas online cobrem contadores de processamento, resets, gaps, erros e acumuladores online de intervalos de origem, interarrival de recepção e variação `receiveDelta - sourceDelta`. Elas não medem latência ponta a ponta.
 
+## Validação física B4b
+
+Em 20 de outubro de 2026, a integração foi validada fisicamente em Windows com APK Android standalone e desktop Tauri. Sem configuração, o receiver continuou ativo e o pipeline apresentou `unavailable`/`missing_configuration` com `targetTilt` neutro. Com perfil B2 e política V2 compatíveis, alcançou `valid` com neutralização `none`, fingerprint esperado e zero descartes de ingresso.
+
+Roll respondeu de modo estável nos dois sentidos, aproximadamente `+1` e `-1 rad`. Pitch foi positivo ao inclinar a borda superior para baixo e negativo ao incliná-la para cima. Ao interromper a transmissão, o pipeline passou para `disconnected` em aproximadamente `1 s`, neutralizou a saída utilizável e preservou `lastEstimate` somente para diagnóstico; uma nova sessão recuperou para `valid` após o reinício da transmissão.
+
+Na observação final, receiver e ingresso não reportaram rejeições nem descartes: `22856` datagramas recebidos e `22856` amostras aceitas, com zero oversized, inválidos, duplicados/fora de ordem, sessão estrangeira, rate limited e descartes de ingresso. Idades locais de poucos milissegundos não constituem medição de latência ponta a ponta.
+
 ## Limites explícitos da B4b
 
-Não há overlay transparente, janela always-on-top/click-through, interpolação visual, nova validação física, alegação de redução de cinetose, teste em veículo ou medição formal de taxa, jitter e latência ponta a ponta.
+Não há overlay transparente, janela always-on-top/click-through, interpolação visual, alegação de redução de cinetose, teste em veículo ou medição formal de taxa, jitter e latência ponta a ponta.

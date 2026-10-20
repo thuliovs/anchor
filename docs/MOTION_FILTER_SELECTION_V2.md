@@ -2,7 +2,7 @@
 
 A V2 do contrato B3b mantém a metodologia offline da V1, mas adiciona vínculo explícito entre política e perfil B2 por fingerprint.
 
-O fingerprint é implementado em `calibration::provenance` para ser compartilhado por seleção offline B3b e runtime B4a sem dependência da seleção sobre o núcleo vivo.
+O fingerprint é implementado em `calibration::provenance` para ser compartilhado por seleção offline B3b e runtime B4a/B4b sem dependência da seleção sobre o núcleo vivo.
 
 ## Diferenças em relação à V1
 
@@ -33,4 +33,10 @@ Formato conceitual da política:
 
 Relatórios V1 continuam sendo evidência histórica da seleção offline já feita. Eles não possuem vínculo suficiente para ativar o núcleo vivo B4a e não devem ser migrados silenciosamente anexando um perfil arbitrário.
 
-Não houve nova execução física B3b nesta fatia. O teste físico que depende dos artefatos B1/B2 locais continua ignorado quando esses arquivos não existem no checkout.
+## Evidência física V2
+
+Em 1 de outubro de 2026, os nove cenários físicos B1 foram regenerados localmente com o mesmo celular e a convenção `flat_screen_up_portrait_top_toward_vehicle_front`. As capturas selecionadas ficaram próximas de `60 Hz`, tiveram uma única sessão por captura e não tiveram descartes do gravador. O perfil estacionário B2 passou no gate de qualidade sem violações.
+
+A seleção física B3b V2 foi então executada com os nove cenários. Ela escolheu `gravity_no_additional_anchor_filter`, sem parâmetros adicionais, com `yawAvailable = false` e fingerprint do perfil B2 `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
+
+Essa seleção é evidência operacional baseada em proxies físicos; não demonstra acurácia angular real. Os artefatos físicos continuam locais/ignorados pelo Git, portanto testes que dependem deles seguem ignorados quando não estão presentes no checkout.
