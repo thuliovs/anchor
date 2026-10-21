@@ -123,4 +123,19 @@ test("usable tilt presents roll and pitch when valid", () => {
 
 test("empty tilt snapshot has absent sample age", () => {
   assert.equal(EMPTY_LIVE_TILT_SNAPSHOT.lastSampleAgeMs, null);
+  assert.deepEqual(EMPTY_LIVE_TILT_SNAPSHOT.metrics.sourceIntervalUs, {
+    count: 0,
+    mean: 0,
+    populationStddev: 0,
+    min: 0,
+    max: 0,
+  });
+  assert.deepEqual(EMPTY_LIVE_TILT_SNAPSHOT.metrics.receiveInterarrivalUs, {
+    count: 0,
+    mean: 0,
+    populationStddev: 0,
+    min: 0,
+    max: 0,
+  });
+  assert.equal(EMPTY_LIVE_TILT_SNAPSHOT.metrics.maxAbsReceiveMinusSourceDeltaUs, 0);
 });

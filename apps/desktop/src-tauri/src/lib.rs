@@ -17,6 +17,7 @@ pub mod live_motion;
 pub mod motion_filtering;
 pub mod protocol;
 pub mod receiver;
+pub mod transport_measurement;
 
 use live_motion::runtime::{read_live_tilt_snapshot, LiveTiltRuntimeHandle, SharedLiveTiltRuntime};
 use receiver::{

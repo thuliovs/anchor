@@ -73,6 +73,18 @@ export interface LiveTiltMetricsDto {
   calibrationErrors: number;
   estimatorErrors: number;
   provenanceMismatches: number;
+  sourceIntervalUs: OnlineScalarStatsDto;
+  receiveInterarrivalUs: OnlineScalarStatsDto;
+  receiveMinusSourceDeltaUs: OnlineScalarStatsDto;
+  maxAbsReceiveMinusSourceDeltaUs: number;
+}
+
+export interface OnlineScalarStatsDto {
+  count: number;
+  mean: number;
+  populationStddev: number;
+  min: number;
+  max: number;
 }
 
 export interface LiveTiltIntegrationMetricsDto {
@@ -128,6 +140,10 @@ export const EMPTY_LIVE_TILT_SNAPSHOT: LiveTiltSnapshotDto = {
     calibrationErrors: 0,
     estimatorErrors: 0,
     provenanceMismatches: 0,
+    sourceIntervalUs: { count: 0, mean: 0, populationStddev: 0, min: 0, max: 0 },
+    receiveInterarrivalUs: { count: 0, mean: 0, populationStddev: 0, min: 0, max: 0 },
+    receiveMinusSourceDeltaUs: { count: 0, mean: 0, populationStddev: 0, min: 0, max: 0 },
+    maxAbsReceiveMinusSourceDeltaUs: 0,
   },
   lastProcessingError: null,
   integrationMetrics: {

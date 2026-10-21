@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui calibracao/zero offline v1 a partir de um dataset `stationary`, um harness offline B3a para avaliar estimadores de roll/pitch, uma selecao offline B3b, um nucleo Rust puro B4a e a integracao diagnostica B4b ao receiver/Tauri/UI.
+Esta etapa agora inclui calibracao/zero offline v1, B3a/B3b, B4a/B4b e a medicao headless B5a de taxa, interarrival e variacao relativa de atraso. B5a está implementada e foi validada fisicamente em 21 de outubro de 2026. B5b não foi implementada e permanece separada.
 
 ## Como executar
 
@@ -38,6 +38,7 @@ Gravacao headless de dataset controlado:
 
 ```bash
 pnpm motion:record -- --scenario stationary --duration-seconds 15
+pnpm motion:measure -- --duration-seconds 60
 pnpm motion:analyze -- artifacts/motion-datasets/<arquivo>.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson --output artifacts/motion-calibrations/<perfil>.json --json
@@ -57,6 +58,20 @@ pnpm dev:desktop
 Se qualquer variavel estiver ausente ou invalida, o receiver UDP continua iniciando e a secao “Tilt processado” fica `unavailable` com `targetTilt` neutro.
 
 O gravador headless reutiliza o mesmo receptor Rust do desktop e deve ser usado com o app Tauri fechado, porque ambos competem pela porta UDP `57421`.
+
+`motion:measure` reutiliza receiver, recorder e análise B1, grava o NDJSON em `artifacts/motion-datasets/` e o relatório JSON v1 em `artifacts/motion-measurements/`. A janela só começa na primeira amostra aceita; a espera inicial tem timeout padrão de 60 s, configurável com `--startup-timeout-seconds`. O relatório separa `armingReceiverCounters` (diagnóstico anterior à janela) de `receiverCounters` (janela medida e única fonte dos gates). Resultado com gates reprovados ainda escreve o relatório e retorna código `2`; timeout ou outro erro operacional retorna `1`. Percentis são baseline exploratória sem gate. O runtime B4b não é atravessado e aparece como `not_applicable`. Consulte `docs/MOTION_TRANSPORT_MEASUREMENT_V1.md`.
+
+### Validacao fisica B5a
+
+Em 21 de outubro de 2026, B5a foi validada em Windows com Android standalone, Wi-Fi/LAN local e receiver headless Rust. A janela solicitada de `60.000.000 us` observou `59.995.648 us` entre a primeira e a última amostra. Foram gravadas `3.601` amostras (`0..3600`) em uma sessão, sem transições, gaps, amostras ausentes estimadas ou perda por sequência. As taxas médias foram `59,9964742072 Hz` na origem e `60,0043523157 Hz` na recepção, diferença absoluta de `0,0078781085 Hz` e relativa de aproximadamente `0,01313%`.
+
+Todos os 14 gates de integridade passaram. O período armado teve zero datagramas e rejeições. Na janela, o receiver aceitou `3.601` amostras e o recorder escreveu as mesmas `3.601`, sem rejeições, descartes ou término incompleto. O runtime B4b ficou `not_applicable` porque o comando headless não o atravessa.
+
+Os percentis registrados constituem a primeira baseline exploratória formal. O interarrival de recepção teve `p95 = 31.715,65 us` e `p99 = 38.971,63 us`; a variação relativa assinada de atraso teve `p95 = 14.548,2 us` e `p99 = 19.878,16 us`; a variação absoluta relativa de atraso, usada somente como proxy de jitter, teve `p95 = 17.969,45 us` e `p99 = 19.878,16 us`. Esses valores ficaram coerentes ou ligeiramente abaixo do contexto histórico, mas não são gates nem conclusão de desempenho.
+
+B5a não mediu latência de rede, latência ponta a ponta ou resposta sensor → tela, e não sustenta alegação terapêutica. B5b não foi implementada; a Fase B permanece aberta exclusivamente por B5b, e a Fase C ainda não começou.
+
+Uma tentativa anterior sem stream, interrompida com Ctrl+C antes da primeira amostra, encerrou receiver e recorder, removeu o dataset vazio, não produziu relatório e retornou código operacional `1`. A ausência dos arquivos `20261021T151800Z` foi confirmada. Essa observação é evidência adicional de lifecycle seguro, não uma medição física aprovada.
 
 ## Calibracao offline v1
 

@@ -97,6 +97,7 @@ pub struct ReceiverState {
     last_sequence: Option<u32>,
     last_valid_received_at: Option<Instant>,
     metrics: ReceiverMetrics,
+    measurement_window_baseline: Option<ReceiverMetrics>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +167,10 @@ impl ReceiverState {
         }
     }
 
+    pub fn measurement_window_baseline(&self) -> Option<ReceiverMetrics> {
+        self.measurement_window_baseline.clone()
+    }
+
     pub fn snapshot(&self, now: Instant) -> ReceiverSnapshot {
         ReceiverSnapshot {
             last_sample: self.last_sample.clone(),
@@ -205,6 +210,11 @@ impl ReceiverState {
         now: Instant,
         acceptance: SampleAcceptance,
     ) -> SampleAcceptance {
+        if self.measurement_window_baseline.is_none() {
+            let mut baseline = self.metrics.clone();
+            baseline.received_datagrams = baseline.received_datagrams.saturating_sub(1);
+            self.measurement_window_baseline = Some(baseline);
+        }
         self.active_sender = Some(sender);
         self.last_sequence = Some(sample.sequence);
         self.active_session_id = Some(sample.session_id.clone());
@@ -496,6 +506,31 @@ mod tests {
         assert_eq!(snapshot.metrics.invalid_packets, 1);
         assert_eq!(snapshot.metrics.oversized_datagrams, 1);
         assert_eq!(snapshot.metrics.rate_limited_datagrams, 1);
+    }
+
+    #[test]
+    fn first_acceptance_captures_atomic_pre_datagram_measurement_baseline() {
+        let now = Instant::now();
+        let mut state = ReceiverState::default();
+        state.record_received_datagram();
+        state.record_invalid_packet();
+        state.record_received_datagram();
+        state.apply_sample(sample(0, "session-a"), sender(41000), now);
+        state.record_received_datagram();
+        state.apply_sample(
+            sample(1, "session-a"),
+            sender(41000),
+            now + Duration::from_millis(1),
+        );
+
+        let baseline = state.measurement_window_baseline().expect("baseline");
+        let end = state.snapshot(now + Duration::from_millis(1)).metrics;
+        assert_eq!(baseline.received_datagrams, 1);
+        assert_eq!(baseline.invalid_packets, 1);
+        assert_eq!(baseline.accepted_samples, 0);
+        assert_eq!(end.received_datagrams - baseline.received_datagrams, 2);
+        assert_eq!(end.accepted_samples - baseline.accepted_samples, 2);
+        assert_eq!(end.invalid_packets - baseline.invalid_packets, 0);
     }
 
     #[test]

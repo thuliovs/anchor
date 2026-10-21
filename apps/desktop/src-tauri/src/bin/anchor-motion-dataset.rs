@@ -20,9 +20,17 @@ use anchor_desktop_lib::{
         udp::{start_udp_receiver, UdpReceiverConfig},
         ReceiverMetrics, ReceiverState, SharedReceiverState,
     },
+    transport_measurement::{
+        build_report_with_arming_counters, format_human_report as format_human_measurement_report,
+        ReceiverCounters,
+        DEFAULT_MEASUREMENT_DIRECTORY, DEFAULT_MEASUREMENT_DURATION_SECONDS,
+        DEFAULT_STARTUP_TIMEOUT_SECONDS,
+    },
 };
 use std::{
-    env, fs, io,
+    env, fs,
+    future::Future,
+    io,
     net::SocketAddr,
     path::PathBuf,
     process::ExitCode,
@@ -34,7 +42,7 @@ use tokio::{sync::watch, time::MissedTickBehavior};
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(env::args().skip(1).collect()).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(outcome) => exit_code_for_outcome(outcome),
         Err(message) => {
             eprintln!("{message}");
             ExitCode::FAILURE
@@ -42,7 +50,20 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(args: Vec<String>) -> Result<(), String> {
+fn exit_code_for_outcome(outcome: CommandOutcome) -> ExitCode {
+    match outcome {
+        CommandOutcome::Success => ExitCode::SUCCESS,
+        CommandOutcome::MeasurementFailedGates => ExitCode::from(2),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandOutcome {
+    Success,
+    MeasurementFailedGates,
+}
+
+async fn run(args: Vec<String>) -> Result<CommandOutcome, String> {
     match parse_command(&args)? {
         Command::Record {
             scenario,
@@ -50,13 +71,33 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             output_path,
             bind_addr,
             notes,
-        } => record_command(scenario, duration_seconds, output_path, bind_addr, notes).await,
-        Command::Analyze { path, json } => analyze_command(path, json),
+        } => record_command(scenario, duration_seconds, output_path, bind_addr, notes)
+            .await
+            .map(|_| CommandOutcome::Success),
+        Command::Measure {
+            duration_seconds,
+            startup_timeout_seconds,
+            dataset_path,
+            report_path,
+            bind_addr,
+        } => {
+            measure_command(
+                duration_seconds,
+                startup_timeout_seconds,
+                dataset_path,
+                report_path,
+                bind_addr,
+            )
+            .await
+        }
+        Command::Analyze { path, json } => {
+            analyze_command(path, json).map(|_| CommandOutcome::Success)
+        }
         Command::Calibrate {
             path,
             output_path,
             json,
-        } => calibrate_command(path, output_path, json),
+        } => calibrate_command(path, output_path, json).map(|_| CommandOutcome::Success),
         Command::Evaluate {
             synthetic,
             dataset_path,
@@ -71,7 +112,8 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             low_pass_tau_ms,
             complementary_tau_ms,
             json,
-        ),
+        )
+        .map(|_| CommandOutcome::Success),
         Command::Select {
             profile_path,
             datasets,
@@ -84,12 +126,20 @@ async fn run(args: Vec<String>) -> Result<(), String> {
             low_pass_tau_ms,
             complementary_tau_ms,
             json,
-        ),
+        )
+        .map(|_| CommandOutcome::Success),
     }
 }
 
 #[derive(Debug)]
 enum Command {
+    Measure {
+        duration_seconds: u64,
+        startup_timeout_seconds: u64,
+        dataset_path: Option<PathBuf>,
+        report_path: Option<PathBuf>,
+        bind_addr: SocketAddr,
+    },
     Record {
         scenario: RecordingScenario,
         duration_seconds: u64,
@@ -130,6 +180,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
 
     match command {
         "record" => parse_record_command(&args[1..]),
+        "measure" => parse_measure_command(&args[1..]),
         "analyze" => parse_analyze_command(&args[1..]),
         "calibrate" => parse_calibrate_command(&args[1..]),
         "evaluate" => parse_evaluate_command(&args[1..]),
@@ -137,6 +188,66 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         "--help" | "-h" => Err(usage()),
         other => Err(format!("unsupported subcommand: {other}\n\n{}", usage())),
     }
+}
+
+fn parse_measure_command(args: &[String]) -> Result<Command, String> {
+    let mut duration_seconds = DEFAULT_MEASUREMENT_DURATION_SECONDS;
+    let mut startup_timeout_seconds = DEFAULT_STARTUP_TIMEOUT_SECONDS;
+    let mut dataset_path = None;
+    let mut report_path = None;
+    let mut bind_addr = "0.0.0.0:57421"
+        .parse()
+        .map_err(|err| format!("invalid default bind address: {err}"))?;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--" {
+            index += 1;
+            continue;
+        }
+        let flag = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("missing value for {flag}"))?;
+        match flag {
+            "--duration-seconds" => {
+                duration_seconds = parse_positive_u64(value, "duration-seconds")?
+            }
+            "--startup-timeout-seconds" => {
+                startup_timeout_seconds = parse_positive_u64(value, "startup-timeout-seconds")?
+            }
+            "--dataset-output" => {
+                if dataset_path.is_some() {
+                    return Err("--dataset-output may only be provided once".to_owned());
+                }
+                dataset_path = Some(PathBuf::from(value));
+            }
+            "--report-output" => {
+                if report_path.is_some() {
+                    return Err("--report-output may only be provided once".to_owned());
+                }
+                report_path = Some(PathBuf::from(value));
+            }
+            "--bind" => {
+                bind_addr = value
+                    .parse()
+                    .map_err(|err| format!("invalid --bind address: {err}"))?
+            }
+            _ => {
+                return Err(format!(
+                    "unsupported option for measure: {flag}\n\n{}",
+                    usage()
+                ))
+            }
+        }
+        index += 2;
+    }
+    Ok(Command::Measure {
+        duration_seconds,
+        startup_timeout_seconds,
+        dataset_path,
+        report_path,
+        bind_addr,
+    })
 }
 
 fn parse_select_command(args: &[String]) -> Result<Command, String> {
@@ -534,6 +645,7 @@ struct RecordingRuntime {
     recorder: anchor_desktop_lib::dataset::DatasetRecorderHandle,
     receiver: anchor_desktop_lib::receiver::udp::UdpReceiverHandle,
     shared_state: SharedReceiverState,
+    sample_rx: watch::Receiver<Option<anchor_desktop_lib::protocol::MotionSampleV1>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -550,6 +662,8 @@ struct FinalizeRecordingOutcome {
     summary: anchor_desktop_lib::dataset::DatasetSummaryRecord,
     size_bytes: u64,
     recorder_shutdown_completed: bool,
+    receiver_metrics: ReceiverMetrics,
+    measurement_window_baseline: Option<ReceiverMetrics>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -592,7 +706,7 @@ async fn try_start_recording_runtime(
     })?;
 
     let shared_state: SharedReceiverState = Arc::new(Mutex::new(ReceiverState::default()));
-    let (sample_tx, _sample_rx) = watch::channel(None);
+    let (sample_tx, sample_rx) = watch::channel(None);
     let receiver = match start_udp_receiver(
         UdpReceiverConfig {
             bind_addr,
@@ -622,6 +736,7 @@ async fn try_start_recording_runtime(
         recorder,
         receiver,
         shared_state,
+        sample_rx,
     })
 }
 
@@ -633,15 +748,17 @@ async fn finalize_recording(
     completed: bool,
 ) -> Result<FinalizeRecordingOutcome, FinalizeRecordingFailure> {
     receiver.shutdown().await;
-    let receiver_metrics = shared_state
-        .lock()
-        .map_err(|_| FinalizeRecordingFailure {
+    let (receiver_metrics, measurement_window_baseline) = {
+        let state = shared_state.lock().map_err(|_| FinalizeRecordingFailure {
             message: "receiver state is unavailable during dataset finalization".to_owned(),
             recorder_shutdown_completed: false,
             dataset_file_removed: false,
-        })?
-        .snapshot(StdInstant::now())
-        .metrics;
+        })?;
+        (
+            state.snapshot(StdInstant::now()).metrics,
+            state.measurement_window_baseline(),
+        )
+    };
     let summary = recorder
         .shutdown(completed)
         .await
@@ -670,7 +787,208 @@ async fn finalize_recording(
         summary,
         size_bytes,
         recorder_shutdown_completed: true,
+        receiver_metrics,
+        measurement_window_baseline,
     })
+}
+
+async fn measure_command(
+    duration_seconds: u64,
+    startup_timeout_seconds: u64,
+    dataset_path: Option<PathBuf>,
+    report_path: Option<PathBuf>,
+    bind_addr: SocketAddr,
+) -> Result<CommandOutcome, String> {
+    let dataset_path = match dataset_path {
+        Some(path) => path,
+        None => default_dataset_output_path(RecordingScenario::Stationary, SystemTime::now())
+            .map_err(|err| format!("failed to build default dataset path: {err}"))?,
+    };
+    let report_path = report_path.unwrap_or_else(|| {
+        let stem = dataset_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("transport-measurement");
+        PathBuf::from(DEFAULT_MEASUREMENT_DIRECTORY).join(format!("{stem}-b5a-v1.json"))
+    });
+    if report_path.exists() {
+        return Err(format!(
+            "report output already exists; refusing to overwrite: {}",
+            report_path.display()
+        ));
+    }
+    println!("transport measurement B5a\nbind: {bind_addr}\ndurationSeconds: {duration_seconds}\nstartupTimeoutSeconds: {startup_timeout_seconds}\ndataset: {}\nreport: {}\nclose the Anchor desktop Tauri app before starting", dataset_path.display(), report_path.display());
+    let mut runtime = try_start_recording_runtime(
+        RecordingScenario::Stationary,
+        Some(dataset_path.clone()),
+        bind_addr,
+        Some("B5a controlled transport measurement".to_owned()),
+    )
+    .await
+    .map_err(|failure| failure.message)?;
+    println!("receiver ready; waiting for the first accepted sample before starting the measurement window");
+    let wait_outcome = wait_for_measurement(
+        Duration::from_secs(startup_timeout_seconds),
+        Duration::from_secs(duration_seconds),
+        &runtime.shared_state,
+        &runtime.recorder,
+        &mut runtime.sample_rx,
+        async {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                eprintln!("failed to listen for Ctrl+C: {err}");
+            }
+        },
+    )
+    .await;
+    let completed = wait_outcome == MeasurementWaitOutcome::Completed;
+    let outcome = finalize_recording(
+        runtime.receiver,
+        &runtime.shared_state,
+        runtime.recorder,
+        &dataset_path,
+        completed,
+    )
+    .await;
+    if matches!(
+        wait_outcome,
+        MeasurementWaitOutcome::StartupTimeout
+            | MeasurementWaitOutcome::InterruptedBeforeFirstSample
+    ) {
+        let cleanup_message = outcome
+            .err()
+            .map(|failure| failure.message)
+            .unwrap_or_else(|| "measurement stopped before its first accepted sample".to_owned());
+        return Err(match wait_outcome {
+            MeasurementWaitOutcome::StartupTimeout => format!(
+                "startup timeout expired after {startup_timeout_seconds}s while waiting for the first accepted sample. {cleanup_message}"
+            ),
+            MeasurementWaitOutcome::InterruptedBeforeFirstSample => format!(
+                "measurement interrupted before the first accepted sample. {cleanup_message}"
+            ),
+            _ => unreachable!(),
+        });
+    }
+    let outcome = outcome.map_err(|failure| failure.message)?;
+    let analysis = analyze_dataset_file(&dataset_path)
+        .map_err(|err| format!("failed to analyze completed measurement dataset: {err}"))?;
+    if analysis.source_interval_us.count == 0 || analysis.receive_interval_us.count == 0 {
+        return Err("measurement has insufficient samples to calculate temporal intervals; dataset was preserved".to_owned());
+    }
+    let window_baseline = outcome
+        .measurement_window_baseline
+        .as_ref()
+        .ok_or_else(|| {
+            "measurement window baseline is unavailable after the first accepted sample".to_owned()
+        })?;
+    let arming_receiver_counters =
+        ReceiverCounters::delta(&ReceiverMetrics::default(), window_baseline);
+    let receiver_counters = ReceiverCounters::delta(window_baseline, &outcome.receiver_metrics);
+    let report = build_report_with_arming_counters(
+        &analysis,
+        &outcome.summary,
+        duration_seconds.saturating_mul(1_000_000),
+        anchor_desktop_lib::receiver::EXPECTED_SAMPLE_RATE_HZ,
+        arming_receiver_counters,
+        receiver_counters,
+    );
+    if let Some(parent) = report_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create report directory: {err}"))?;
+    }
+    let mut report_file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&report_path)
+        .map_err(|err| format!("failed to create report without overwriting: {err}"))?;
+    serde_json::to_writer_pretty(&mut report_file, &report)
+        .map_err(|err| format!("failed to write report JSON: {err}"))?;
+    use std::io::Write;
+    report_file
+        .write_all(b"\n")
+        .map_err(|err| format!("failed to finish report JSON: {err}"))?;
+    println!("{}", format_human_measurement_report(&report));
+    println!(
+        "dataset preserved: {}\nreport written: {}",
+        dataset_path.display(),
+        report_path.display()
+    );
+    Ok(if report.integrity_evaluation.passed {
+        CommandOutcome::Success
+    } else {
+        CommandOutcome::MeasurementFailedGates
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeasurementWaitOutcome {
+    Completed,
+    StartupTimeout,
+    InterruptedBeforeFirstSample,
+    InterruptedDuringWindow,
+}
+
+async fn wait_for_measurement<F>(
+    startup_timeout: Duration,
+    measurement_duration: Duration,
+    shared_state: &SharedReceiverState,
+    recorder: &anchor_desktop_lib::dataset::DatasetRecorderHandle,
+    sample_rx: &mut watch::Receiver<Option<anchor_desktop_lib::protocol::MotionSampleV1>>,
+    interrupt: F,
+) -> MeasurementWaitOutcome
+where
+    F: Future<Output = ()>,
+{
+    tokio::pin!(interrupt);
+    let startup_deadline = tokio::time::Instant::now() + startup_timeout;
+    let mut progress_tick = tokio::time::interval(Duration::from_secs(1));
+    progress_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    if sample_rx.borrow().is_none() {
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(startup_deadline) => {
+                    println!("startup timeout reached while waiting for the first accepted sample");
+                    return MeasurementWaitOutcome::StartupTimeout;
+                }
+                _ = &mut interrupt => {
+                    println!("received Ctrl+C before the first accepted sample");
+                    return MeasurementWaitOutcome::InterruptedBeforeFirstSample;
+                }
+                changed = sample_rx.changed() => {
+                    if changed.is_err() {
+                        return MeasurementWaitOutcome::InterruptedBeforeFirstSample;
+                    }
+                    if sample_rx.borrow_and_update().is_some() {
+                        break;
+                    }
+                }
+                _ = progress_tick.tick() => {
+                    println!("waiting for stream: accepted=0 written={} recorderDropped={}", recorder.snapshot().written_samples, recorder.snapshot().recorder_dropped_samples);
+                }
+            }
+        }
+    }
+
+    println!("first accepted sample received; measurement window started");
+    let window_started_at = StdInstant::now();
+    let deadline = tokio::time::Instant::now() + measurement_duration;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {
+                println!("measurement duration reached");
+                return MeasurementWaitOutcome::Completed;
+            }
+            _ = &mut interrupt => {
+                println!("received Ctrl+C during measurement window");
+                return MeasurementWaitOutcome::InterruptedDuringWindow;
+            }
+            _ = progress_tick.tick() => {
+                let accepted = shared_state.lock().ok().map(|state| state.snapshot(StdInstant::now()).metrics.accepted_samples).unwrap_or(0);
+                let recorder_snapshot = recorder.snapshot();
+                println!("measurement progress: elapsedSeconds={} accepted={} written={} recorderDropped={}", window_started_at.elapsed().as_secs(), accepted, recorder_snapshot.written_samples, recorder_snapshot.recorder_dropped_samples);
+            }
+        }
+    }
 }
 
 async fn wait_for_recording(
@@ -925,6 +1243,7 @@ fn format_bind_error(bind_addr: SocketAddr, err: &io::Error) -> String {
 fn usage() -> String {
     [
         "Usage:",
+        "  anchor-motion-dataset measure [--duration-seconds <seconds>] [--startup-timeout-seconds <seconds>] [--dataset-output <path>] [--report-output <path>] [--bind <host:port>]",
         "  anchor-motion-dataset record --scenario <name> --duration-seconds <seconds> [--output <path>] [--bind <host:port>] [--notes <text>]",
         "  anchor-motion-dataset analyze <file.ndjson> [--json]",
         "  anchor-motion-dataset calibrate <file.ndjson> [--output <profile.json>] [--json]",
@@ -1004,6 +1323,7 @@ fn cleanup_empty_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anchor_desktop_lib::transport_measurement::build_report;
     use std::{path::Path, time::SystemTime};
     use tokio::sync::watch;
 
@@ -1019,6 +1339,449 @@ mod tests {
         .expect_err("unknown scenario must fail");
 
         assert!(err.contains("scenario must be one of"));
+    }
+
+    #[test]
+    fn parse_measure_rejects_invalid_duration_without_panic() {
+        for value in ["0", "-1", "abc"] {
+            let result = std::panic::catch_unwind(|| {
+                parse_command(&[
+                    "measure".to_owned(),
+                    "--duration-seconds".to_owned(),
+                    value.to_owned(),
+                ])
+            });
+            assert!(result.expect("parser must not panic").is_err());
+        }
+    }
+
+    #[test]
+    fn parse_measure_accepts_startup_timeout_and_rejects_invalid_values() {
+        let parsed = parse_command(&[
+            "measure".to_owned(),
+            "--startup-timeout-seconds".to_owned(),
+            "7".to_owned(),
+        ])
+        .expect("valid startup timeout");
+        assert!(matches!(
+            parsed,
+            Command::Measure {
+                startup_timeout_seconds: 7,
+                ..
+            }
+        ));
+
+        for value in ["0", "-1", "invalid"] {
+            let result = std::panic::catch_unwind(|| {
+                parse_command(&[
+                    "measure".to_owned(),
+                    "--startup-timeout-seconds".to_owned(),
+                    value.to_owned(),
+                ])
+            });
+            assert!(result.expect("parser must not panic").is_err());
+        }
+    }
+
+    fn measurement_payload(sequence: u32, elapsed_us: u64) -> Vec<u8> {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../packages/protocol/fixtures/valid/motion-sample.json"
+        ))
+        .expect("valid fixture");
+        value["sequence"] = serde_json::json!(sequence);
+        value["sessionElapsedUs"] = serde_json::json!(elapsed_us);
+        serde_json::to_vec(&value).expect("serialize payload")
+    }
+
+    #[tokio::test]
+    async fn measurement_window_waits_for_first_sample_and_keeps_it_in_dataset() {
+        let output_path = std::env::temp_dir().join(format!(
+            "anchor-measurement-window-{}-{}.ndjson",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let mut runtime = try_start_recording_runtime(
+            RecordingScenario::Stationary,
+            Some(output_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+        )
+        .await
+        .expect("runtime");
+        let target = runtime.receiver.local_addr();
+        let sender = tokio::spawn(async move {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            socket.send_to(b"{", target).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            socket
+                .send_to(&measurement_payload(42, 0), target)
+                .await
+                .unwrap();
+            socket
+                .send_to(&measurement_payload(43, 10_000), target)
+                .await
+                .unwrap();
+            socket
+                .send_to(&measurement_payload(44, 20_000), target)
+                .await
+                .unwrap();
+        });
+        let started = StdInstant::now();
+        let wait = wait_for_measurement(
+            Duration::from_millis(200),
+            Duration::from_millis(40),
+            &runtime.shared_state,
+            &runtime.recorder,
+            &mut runtime.sample_rx,
+            std::future::pending(),
+        )
+        .await;
+        assert_eq!(wait, MeasurementWaitOutcome::Completed);
+        assert!(started.elapsed() >= Duration::from_millis(70));
+        sender.await.unwrap();
+        let finalized = finalize_recording(
+            runtime.receiver,
+            &runtime.shared_state,
+            runtime.recorder,
+            &output_path,
+            true,
+        )
+        .await
+        .expect("finalize");
+        let analysis = anchor_desktop_lib::dataset::load_validated_dataset_file(&output_path)
+            .expect("dataset");
+        assert_eq!(analysis.samples.len(), 3);
+        assert_eq!(analysis.samples[0].sample.sequence, 42);
+        let baseline = finalized.measurement_window_baseline.as_ref().unwrap();
+        let arming = ReceiverCounters::delta(&ReceiverMetrics::default(), baseline);
+        let window = ReceiverCounters::delta(baseline, &finalized.receiver_metrics);
+        assert_eq!(arming.received_datagrams, 1);
+        assert_eq!(arming.invalid_packets, 1);
+        assert_eq!(arming.accepted_samples, 0);
+        assert_eq!(window.received_datagrams, 3);
+        assert_eq!(window.accepted_samples, 3);
+        assert_eq!(window.invalid_packets, 0);
+        let report = build_report_with_arming_counters(
+            &analyze_dataset_file(&output_path).unwrap(),
+            &finalized.summary,
+            40_000,
+            60,
+            arming,
+            window,
+        );
+        assert_eq!(report.arming_receiver_counters.invalid_packets, 1);
+        assert_eq!(report.receiver_counters.invalid_packets, 0);
+        assert_eq!(
+            report
+                .integrity_evaluation
+                .gates
+                .iter()
+                .find(|gate| gate.id == "receiver.invalid_zero")
+                .unwrap()
+                .result,
+            anchor_desktop_lib::transport_measurement::GateResult::Passed
+        );
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[tokio::test]
+    async fn invalid_datagram_after_first_sample_is_inside_window_and_fails_gate() {
+        let output_path = std::env::temp_dir().join(format!(
+            "anchor-measurement-window-invalid-{}-{}.ndjson",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let mut runtime = try_start_recording_runtime(
+            RecordingScenario::Stationary,
+            Some(output_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let target = runtime.receiver.local_addr();
+        tokio::spawn(async move {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            socket
+                .send_to(&measurement_payload(42, 0), target)
+                .await
+                .unwrap();
+            socket.send_to(b"{", target).await.unwrap();
+            socket
+                .send_to(&measurement_payload(43, 16_667), target)
+                .await
+                .unwrap();
+        });
+        assert_eq!(
+            wait_for_measurement(
+                Duration::from_secs(1),
+                Duration::from_millis(50),
+                &runtime.shared_state,
+                &runtime.recorder,
+                &mut runtime.sample_rx,
+                std::future::pending(),
+            )
+            .await,
+            MeasurementWaitOutcome::Completed
+        );
+        let finalized = finalize_recording(
+            runtime.receiver,
+            &runtime.shared_state,
+            runtime.recorder,
+            &output_path,
+            true,
+        )
+        .await
+        .unwrap();
+        let baseline = finalized.measurement_window_baseline.as_ref().unwrap();
+        let window = ReceiverCounters::delta(baseline, &finalized.receiver_metrics);
+        assert_eq!(window.invalid_packets, 1);
+        let report = build_report(
+            &analyze_dataset_file(&output_path).unwrap(),
+            &finalized.summary,
+            50_000,
+            60,
+            window,
+        );
+        assert_eq!(
+            report
+                .integrity_evaluation
+                .gates
+                .iter()
+                .find(|gate| gate.id == "receiver.invalid_zero")
+                .unwrap()
+                .result,
+            anchor_desktop_lib::transport_measurement::GateResult::Failed
+        );
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[tokio::test]
+    async fn startup_timeout_shuts_down_and_removes_empty_dataset() {
+        let output_path = std::env::temp_dir().join(format!(
+            "anchor-measurement-timeout-{}-{}.ndjson",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let mut runtime = try_start_recording_runtime(
+            RecordingScenario::Stationary,
+            Some(output_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+        )
+        .await
+        .expect("runtime");
+        let wait = wait_for_measurement(
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+            &runtime.shared_state,
+            &runtime.recorder,
+            &mut runtime.sample_rx,
+            std::future::pending(),
+        )
+        .await;
+        assert_eq!(wait, MeasurementWaitOutcome::StartupTimeout);
+        let failure = finalize_recording(
+            runtime.receiver,
+            &runtime.shared_state,
+            runtime.recorder,
+            &output_path,
+            false,
+        )
+        .await
+        .expect_err("empty recording must be cleaned up");
+        assert!(failure.recorder_shutdown_completed);
+        assert!(failure.dataset_file_removed);
+        assert!(!output_path.exists());
+    }
+
+    #[tokio::test]
+    async fn measure_command_startup_timeout_is_operational_error_without_report() {
+        let base = std::env::temp_dir().join(format!(
+            "anchor-measurement-command-timeout-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dataset_path = base.with_extension("ndjson");
+        let report_path = base.with_extension("json");
+        let error = measure_command(
+            1,
+            1,
+            Some(dataset_path.clone()),
+            Some(report_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .expect_err("startup timeout is an operational error");
+        assert!(error.contains("startup timeout expired"));
+        assert!(!dataset_path.exists());
+        assert!(!report_path.exists());
+    }
+
+    #[test]
+    fn command_outcomes_preserve_success_and_failed_gate_exit_codes() {
+        assert_eq!(
+            exit_code_for_outcome(CommandOutcome::Success),
+            ExitCode::from(0)
+        );
+        assert_eq!(
+            exit_code_for_outcome(CommandOutcome::MeasurementFailedGates),
+            ExitCode::from(2)
+        );
+        // Operational errors remain the Err branch in main and therefore exit code 1.
+        assert_eq!(ExitCode::FAILURE, ExitCode::from(1));
+    }
+
+    #[tokio::test]
+    async fn interrupt_before_first_sample_cannot_produce_valid_measurement() {
+        let output_path = std::env::temp_dir().join(format!(
+            "anchor-measurement-pre-interrupt-{}-{}.ndjson",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let mut runtime = try_start_recording_runtime(
+            RecordingScenario::Stationary,
+            Some(output_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+        )
+        .await
+        .expect("runtime");
+        let wait = wait_for_measurement(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            &runtime.shared_state,
+            &runtime.recorder,
+            &mut runtime.sample_rx,
+            std::future::ready(()),
+        )
+        .await;
+        assert_eq!(wait, MeasurementWaitOutcome::InterruptedBeforeFirstSample);
+        assert!(finalize_recording(
+            runtime.receiver,
+            &runtime.shared_state,
+            runtime.recorder,
+            &output_path,
+            false,
+        )
+        .await
+        .is_err());
+        assert!(!output_path.exists());
+    }
+
+    #[tokio::test]
+    async fn interrupt_after_intervals_keeps_interrupted_dataset_for_failed_report() {
+        let output_path = std::env::temp_dir().join(format!(
+            "anchor-measurement-mid-interrupt-{}-{}.ndjson",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let mut runtime = try_start_recording_runtime(
+            RecordingScenario::Stationary,
+            Some(output_path.clone()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+        )
+        .await
+        .expect("runtime");
+        let target = runtime.receiver.local_addr();
+        tokio::spawn(async move {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            for (sequence, elapsed) in [(42, 0), (43, 16_667), (44, 33_334)] {
+                socket
+                    .send_to(&measurement_payload(sequence, elapsed), target)
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+        let wait = wait_for_measurement(
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            &runtime.shared_state,
+            &runtime.recorder,
+            &mut runtime.sample_rx,
+            async { tokio::time::sleep(Duration::from_millis(80)).await },
+        )
+        .await;
+        assert_eq!(wait, MeasurementWaitOutcome::InterruptedDuringWindow);
+        let finalized = finalize_recording(
+            runtime.receiver,
+            &runtime.shared_state,
+            runtime.recorder,
+            &output_path,
+            false,
+        )
+        .await
+        .expect("non-empty interrupted dataset is preserved");
+        let analysis = analyze_dataset_file(&output_path).expect("analyze");
+        assert!(analysis.source_interval_us.count >= 1);
+        let report = build_report(
+            &analysis,
+            &finalized.summary,
+            2_000_000,
+            60,
+            ReceiverCounters::delta(&ReceiverMetrics::default(), &finalized.receiver_metrics),
+        );
+        assert!(!report.integrity_evaluation.passed);
+        assert_eq!(
+            report
+                .integrity_evaluation
+                .gates
+                .iter()
+                .find(|gate| gate.id == "recorder.completed_cleanly")
+                .unwrap()
+                .result,
+            anchor_desktop_lib::transport_measurement::GateResult::Failed
+        );
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[tokio::test]
+    async fn measure_refuses_to_overwrite_existing_report_before_starting_receiver() {
+        let report_path = std::env::temp_dir().join(format!(
+            "anchor-existing-measurement-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        fs::write(&report_path, "preserve-me").expect("write existing report");
+        let dataset_path = report_path.with_extension("ndjson");
+        let err = run(vec![
+            "measure".to_owned(),
+            "--duration-seconds".to_owned(),
+            "1".to_owned(),
+            "--dataset-output".to_owned(),
+            dataset_path.display().to_string(),
+            "--report-output".to_owned(),
+            report_path.display().to_string(),
+        ])
+        .await
+        .expect_err("existing report must fail");
+        assert!(err.contains("refusing to overwrite"));
+        assert_eq!(fs::read_to_string(&report_path).unwrap(), "preserve-me");
+        assert!(!dataset_path.exists());
+        let _ = fs::remove_file(report_path);
     }
 
     #[test]

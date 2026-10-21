@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 20 de outubro de 2026
-> **Estado:** plataforma de diagnóstico validada em hardware real; B4b integrada e validada fisicamente em Windows com Android standalone e desktop Tauri
+> **Snapshot de referência:** 21 de outubro de 2026
+> **Estado:** plataforma de diagnóstico validada em hardware real; B5a implementada e validada fisicamente em Windows com Android standalone e receiver headless Rust
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -22,7 +22,7 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 5. o frontend Tauri exibe os dados e métricas em tempo real;
 6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e ligar o núcleo Rust puro B4a ao receiver/Tauri/UI como diagnóstico B4b.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável, camada B3b para seleção offline auditável e runtime B4b que expõe snapshots seguros de tilt processado. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, B3a/B3b, runtime B4b e medição headless B5a de taxa, interarrival e variação relativa. B5a está implementada e foi validada fisicamente; seus percentis constituem a primeira baseline exploratória formal, sem gates de desempenho. B5b não foi implementada. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
 
 ## 2. Problema e hipótese do produto
 
@@ -539,6 +539,27 @@ Ao interromper a transmissão, o estado passou para `disconnected` em aproximada
 
 Na observação final, o receiver registrou `22856` datagramas recebidos e `22856` amostras aceitas, com zero oversized, inválidos, duplicados/fora de ordem, sessão estrangeira, rate limited e descartes de ingresso. Foram observadas idades locais de amostra de poucos milissegundos; isso não é medição de latência ponta a ponta.
 
+### Validação física B5a — 21 de outubro de 2026
+
+A medição B5a foi executada em Windows com Android standalone, Wi-Fi/LAN local e receiver headless Rust. A janela solicitada foi de `60.000.000 us`; a duração observada entre a primeira e a última amostra foi `59.995.648 us`. O dataset aprovado contém `3.601` amostras, sequências `0..3600`, uma sessão, zero transições, zero gaps, zero amostras ausentes estimadas e perda por sequência de `0%`.
+
+A taxa média de origem foi `59,9964742072 Hz` e a taxa média recebida foi `60,0043523157 Hz`, com diferença absoluta de `0,0078781085 Hz` e diferença relativa de aproximadamente `0,01313%`. Todos os 14 gates de integridade foram aprovados. No período armado houve zero datagramas e zero rejeições. Durante a janela, o receiver recebeu `3.601` datagramas e aceitou `3.601` amostras, sem oversized, inválidos, duplicados/fora de ordem, sessão estrangeira ou rate limited. O recorder recebeu `3.601` eventos aceitos, escreveu `3.601` amostras, não descartou amostras e concluiu de forma limpa. As métricas do runtime B4b ficaram `not_applicable`, com motivo `headless_measurement_does_not_traverse_live_tilt_runtime`, porque a medição headless não atravessa esse runtime.
+
+A primeira baseline exploratória formal, calculada sobre `3.600` intervalos, foi:
+
+| Distribuição | Média | Desvio-padrão populacional | Mínimo | p50 | p95 | p99 | Máximo |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Intervalo de origem | `16.667,646 us` | `4.657,093 us` | `9.947 us` | `19.895 us` | `19.896 us` | `19.896 us` | `19.896 us` |
+| Interarrival de recepção | `16.665,458 us` | `8.547,669 us` | `44 us` | `19.143 us` | `31.715,65 us` | `38.971,63 us` | `44.609 us` |
+| Variação relativa assinada de atraso | `-2,188 us` | `7.143,793 us` | `-19.851 us` | `333,5 us` | `14.548,2 us` | `19.878,16 us` | `26.331 us` |
+| Variação absoluta relativa de atraso / proxy de jitter | `4.462,188 us` | `5.578,768 us` | `0 us` | `1.745,5 us` | `17.969,45 us` | `19.878,16 us` | `26.331 us` |
+
+Descritivamente, o interarrival (`p95` `31,716 ms`; `p99` `38,972 ms`) e a variação relativa assinada de atraso (`p95` `14,548 ms`; `p99` `19,878 ms`) ficaram coerentes ou ligeiramente abaixo do contexto histórico saudável de, respectivamente, `33–34/41 ms` e `14–16/24 ms`. Essa comparação é apenas contexto: não define thresholds, não aprova nem reprova desempenho e não sustenta alegação clínica.
+
+B5a não mediu latência de rede, latência ponta a ponta nem resposta sensor → tela. A variação absoluta relativa de atraso é somente um proxy de jitter, não jitter absoluto. A medição física aprova a integridade da execução e estabelece uma baseline exploratória; não comprova desempenho terapêutico.
+
+Antes da execução aprovada, uma tentativa sem stream foi interrompida com Ctrl+C antes da primeira amostra. O receiver e o recorder foram encerrados, o dataset vazio foi removido, nenhum relatório foi produzido e o código operacional foi `1`. Foi confirmada a ausência de `artifacts/motion-datasets/20261021T151800Z-stationary.ndjson` e `artifacts/motion-measurements/20261021T151800Z-stationary-b5a-v1.json`. Isso é evidência adicional do lifecycle operacional seguro, não uma medição física B5a aprovada.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -602,6 +623,7 @@ pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson --output 
 pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<dataset>.ndjson --profile artifacts/motion-calibrations/<profile>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
+pnpm motion:measure -- --duration-seconds 60
 ```
 
 Validações principais:
@@ -641,7 +663,7 @@ cd apps/mobile/android
 - janela transparente, always-on-top e click-through;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
-- medição formal de latência ponta a ponta e jitter;
+- medição formal de latência ponta a ponta e de jitter absoluto;
 - descoberta automática do desktop;
 - pareamento, autenticação ou criptografia;
 - ACK ou canal de controle;
@@ -701,9 +723,9 @@ Concluída em 2 de setembro de 2026.
 3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
 4. Concluído na fatia B3b: executar seleção offline V2 com as nove capturas físicas regeneradas e produzir política vinculada ao perfil B2.
 5. Concluído nas fatias B4a e B4b: definir o processamento vivo fail-closed, integrá-lo ao receiver/desktop e validá-lo fisicamente.
-6. Medir formalmente taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+6. B5a concluída: implementada e validada fisicamente para medir taxa, interarrival e variação relativa de atraso, com todos os gates de integridade aprovados e primeira baseline exploratória formal registrada. B5b permanece pendente e separada para uma aproximação defensável de latência ponta a ponta.
 
-As fatias B1, B2, B3a, B3b, B4a e B4b estão implementadas; B4b foi validada fisicamente. A Fase B permanece aberta exclusivamente pela medição formal de taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta. A Fase C ainda não começou.
+As fatias B1, B2, B3a, B3b, B4a, B4b e B5a estão implementadas; B4b e B5a foram validadas fisicamente. B5b não foi implementada. A Fase B permanece aberta exclusivamente por B5b. A Fase C ainda não começou.
 
 ### Fase C — Primeiro overlay experimental
 
