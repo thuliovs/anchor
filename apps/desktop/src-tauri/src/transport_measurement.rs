@@ -1,16 +1,18 @@
+pub use crate::measurement_integrity::{GateResult, IntegrityGate};
 use crate::{
     dataset::{DatasetAnalysis, DatasetSummaryRecord, IntervalStats, SignedIntervalStats},
+    measurement_integrity::{evaluate_shared_integrity, SharedIntegrityInput},
     receiver::ReceiverMetrics,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 pub const TRANSPORT_MEASUREMENT_REPORT_VERSION: u8 = 1;
 pub const DEFAULT_MEASUREMENT_DURATION_SECONDS: u64 = 60;
 pub const DEFAULT_STARTUP_TIMEOUT_SECONDS: u64 = 60;
-pub const DURATION_SHORTFALL_TOLERANCE_US: u64 = 250_000;
-pub const RATE_TOLERANCE_FRACTION: f64 = 0.05;
-pub const MAX_SEQUENCE_LOSS_FRACTION: f64 = 0.001;
+pub use crate::measurement_integrity::{
+    DURATION_SHORTFALL_TOLERANCE_US, MAX_SEQUENCE_LOSS_FRACTION, RATE_TOLERANCE_FRACTION,
+};
 pub const DEFAULT_MEASUREMENT_DIRECTORY: &str = "artifacts/motion-measurements";
 pub const HEADLESS_RUNTIME_REASON: &str =
     "headless_measurement_does_not_traverse_live_tilt_runtime";
@@ -212,23 +214,6 @@ pub enum NotApplicable {
 pub struct IntegrityEvaluation {
     pub passed: bool,
     pub gates: Vec<IntegrityGate>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct IntegrityGate {
-    pub id: &'static str,
-    pub observed: Value,
-    pub expected: String,
-    pub result: GateResult,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GateResult {
-    Passed,
-    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -516,99 +501,31 @@ fn evaluate_gates(
     receiver: &ReceiverCounters,
     recorder: &RecorderCounters,
 ) -> Vec<IntegrityGate> {
-    let mut gates = Vec::new();
-    let minimum_duration = requested_duration_us.saturating_sub(DURATION_SHORTFALL_TOLERANCE_US);
-    gates.push(gate(
-        "duration.minimum_observed",
-        json!(analysis.observed_duration_us),
-        format!("observedDurationUs >= {minimum_duration}"),
-        analysis.observed_duration_us >= minimum_duration,
-    ));
-    gates.push(gate(
-        "session.exactly_one",
-        json!(continuity.session_count),
-        "sessionCount == 1".to_owned(),
-        continuity.session_count == 1,
-    ));
-    gates.push(gate(
-        "session.no_transitions",
-        json!(continuity.session_transitions),
-        "sessionTransitions == 0".to_owned(),
-        continuity.session_transitions == 0,
-    ));
     let source_rate = available_value(&rates.source_average_rate_hz);
-    let expected = f64::from(expected_rate);
-    gates.push(gate(
-        "rate.source_expected",
-        source_rate.map_or(Value::Null, |value| json!(value)),
-        format!("finite positive source rate within ±5% of {expected_rate} Hz"),
-        source_rate
-            .is_some_and(|value| ((value - expected) / expected).abs() <= RATE_TOLERANCE_FRACTION),
-    ));
     let receive_rate = available_value(&rates.receive_average_rate_hz);
     let loss_fraction = sequence_loss_fraction(&continuity.sequence_loss);
-    let expected_receive = source_rate
-        .zip(loss_fraction)
-        .map(|(value, loss)| value * (1.0 - loss));
-    gates.push(gate(
-        "rate.receive_loss_coherent",
-        receive_rate.map_or(Value::Null, |value| json!(value)),
-        "finite positive receive rate within ±5% of sourceRate * (1 - sequenceLossFraction)"
-            .to_owned(),
-        receive_rate
-            .zip(expected_receive)
-            .is_some_and(|(observed, expected)| {
-                expected > 0.0
-                    && ((observed - expected) / expected).abs() <= RATE_TOLERANCE_FRACTION
-            }),
-    ));
-    gates.push(gate(
-        "continuity.sequence_loss",
-        serde_json::to_value(&continuity.sequence_loss)
-            .unwrap_or_else(|_| json!({"availability": "unavailable", "reason": "serialization_error"})),
-        format!("estimatedMissingSamples / (observedSamples + estimatedMissingSamples) <= {MAX_SEQUENCE_LOSS_FRACTION}"),
-        loss_fraction.is_some_and(|fraction| fraction <= MAX_SEQUENCE_LOSS_FRACTION),
-    ));
-    for (id, value) in [
-        ("receiver.oversized_zero", receiver.oversized_datagrams),
-        ("receiver.invalid_zero", receiver.invalid_packets),
-        (
-            "receiver.duplicate_or_out_of_order_zero",
-            receiver.duplicate_or_out_of_order_packets,
+    evaluate_shared_integrity(&SharedIntegrityInput {
+        requested_duration_us,
+        observed_duration_us: analysis.observed_duration_us,
+        expected_sample_rate_hz: expected_rate,
+        session_count: continuity.session_count,
+        session_transitions: continuity.session_transitions,
+        source_average_rate_hz: source_rate,
+        receive_average_rate_hz: receive_rate,
+        sequence_loss_observed: serde_json::to_value(&continuity.sequence_loss).unwrap_or_else(
+            |_| json!({"availability": "unavailable", "reason": "serialization_error"}),
         ),
-        (
-            "receiver.foreign_session_zero",
-            receiver.foreign_session_packets,
-        ),
-        (
-            "receiver.rate_limited_zero",
-            receiver.rate_limited_datagrams,
-        ),
-    ] {
-        gates.push(gate(id, json!(value), "value == 0".to_owned(), value == 0));
-    }
-    gates.push(gate(
-        "recorder.dropped_zero",
-        json!(recorder.recorder_dropped_samples),
-        "recorderDroppedSamples == 0".to_owned(),
-        recorder.recorder_dropped_samples == 0,
-    ));
-    gates.push(gate(
-        "path.accepted_samples_consistent",
-        json!({
-            "receiverAcceptedSamples": receiver.accepted_samples,
-            "recorderReceivedAcceptedSamples": recorder.received_accepted_samples
-        }),
-        "receiverAcceptedSamples == recorderReceivedAcceptedSamples".to_owned(),
-        receiver.accepted_samples == recorder.received_accepted_samples,
-    ));
-    gates.push(gate(
-        "recorder.completed_cleanly",
-        json!(recorder.completion),
-        "completion == clean".to_owned(),
-        recorder.completion == "clean",
-    ));
-    gates
+        sequence_loss_fraction: loss_fraction,
+        oversized_packets: receiver.oversized_datagrams,
+        invalid_packets: receiver.invalid_packets,
+        duplicate_or_out_of_order_packets: receiver.duplicate_or_out_of_order_packets,
+        foreign_session_packets: receiver.foreign_session_packets,
+        rate_limited_packets: receiver.rate_limited_datagrams,
+        recorder_dropped: recorder.recorder_dropped_samples,
+        receiver_accepted_samples: receiver.accepted_samples,
+        recorder_received_accepted_samples: recorder.received_accepted_samples,
+        completed_cleanly: recorder.completion == "clean",
+    })
 }
 
 fn available_value(rate: &AvailableRate) -> Option<f64> {
@@ -622,24 +539,6 @@ fn sequence_loss_fraction(loss: &SequenceLoss) -> Option<f64> {
     match loss {
         SequenceLoss::Available { fraction, .. } => Some(*fraction),
         SequenceLoss::Unavailable { .. } => None,
-    }
-}
-
-fn gate(id: &'static str, observed: Value, expected: String, passed: bool) -> IntegrityGate {
-    IntegrityGate {
-        id,
-        observed,
-        expected,
-        result: if passed {
-            GateResult::Passed
-        } else {
-            GateResult::Failed
-        },
-        message: if passed {
-            "integrity condition satisfied".to_owned()
-        } else {
-            "integrity condition not satisfied".to_owned()
-        },
     }
 }
 

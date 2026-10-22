@@ -39,6 +39,7 @@ export function AnchorSensorScreen({
   const [snapshot, setSnapshot] = React.useState<MotionCaptureSnapshot>(controller.getSnapshot());
   const [hostInput, setHostInput] = React.useState('');
   const [portInput, setPortInput] = React.useState(DEFAULT_PORT);
+  const [latencyMode, setLatencyMode] = React.useState(false);
 
   React.useEffect(() => {
     const unsubscribe = controller.subscribe(setSnapshot);
@@ -66,6 +67,9 @@ export function AnchorSensorScreen({
   const isPrimaryDisabled = snapshot.status === 'unsupported'
     || (!isCapturing && (isCheckingSensors || !sensorsReady || !destinationValidation.ok));
   const fieldsDisabled = snapshot.status === 'starting' || isCapturing;
+  const latencyMetrics = snapshot.latencyTransportMetrics ?? {
+    offeredSamples: 0, sentSamples: 0, droppedBackpressure: 0, rejectedSamples: 0, sendErrors: 0,
+  };
 
   function handlePrimaryAction() {
     if (isCapturing) {
@@ -77,7 +81,7 @@ export function AnchorSensorScreen({
       return;
     }
 
-    controller.startCapture(destinationValidation.destination).catch(() => undefined);
+    controller.startCapture(destinationValidation.destination, latencyMode).catch(() => undefined);
   }
 
   return (
@@ -168,6 +172,19 @@ export function AnchorSensorScreen({
             <Text style={[styles.bodyText, styles.spacingTop8, { color: palette.textMuted }]}>
               X+ = direita do veiculo, Y+ = frente do veiculo, Z+ = cima.
             </Text>
+          </InfoCard>
+
+          <InfoCard palette={palette} title="Medicao B5b (opt-in)">
+            <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: latencyMode, disabled: fieldsDisabled }} disabled={fieldsDisabled} onPress={() => setLatencyMode(value => !value)}>
+              <Text style={[styles.bodyText, { color: palette.text }]}>{latencyMode ? '☑' : '☐'} Ativar transporte bidirecional exclusivo de latencia</Text>
+            </Pressable>
+            <DataRow label="Modo ativo" value={snapshot.latencyMeasurementMode ? 'B5b' : 'stream v1 normal'} palette={palette} />
+            <DataRow label="Measurement ID" value={snapshot.measurementId ?? '--'} palette={palette} />
+            <DataRow label="Amostras oferecidas" value={String(latencyMetrics.offeredSamples)} palette={palette} />
+            <DataRow label="Amostras enviadas" value={String(latencyMetrics.sentSamples)} palette={palette} />
+            <DataRow label="Descartes por backpressure" value={String(latencyMetrics.droppedBackpressure)} palette={palette} />
+            <DataRow label="Amostras rejeitadas" value={String(latencyMetrics.rejectedSamples)} palette={palette} />
+            <DataRow label="Erros de envio" value={String(latencyMetrics.sendErrors)} palette={palette} />
           </InfoCard>
 
           <InfoCard palette={palette} title="Sessao">

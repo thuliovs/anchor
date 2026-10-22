@@ -39,6 +39,8 @@ artifacts/motion-datasets/
 artifacts/motion-calibrations/
 artifacts/motion-filtering/
 artifacts/motion-measurements/
+artifacts/motion-latency-datasets/
+artifacts/motion-latency-measurements/
 
 # Android
 **/android/.gradle/

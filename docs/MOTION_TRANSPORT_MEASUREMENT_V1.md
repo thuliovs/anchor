@@ -105,7 +105,7 @@ Uma tentativa anterior sem stream foi interrompida com Ctrl+C antes da primeira 
 - `artifacts/motion-datasets/20261021T151800Z-stationary.ndjson`;
 - `artifacts/motion-measurements/20261021T151800Z-stationary-b5a-v1.json`.
 
-Esse resultado confirma o comportamento operacional seguro e não integra a medição física B5a aprovada. Com esta validação, B5a está concluída. B5b não foi implementada e permanece separada; a Fase B continua aberta exclusivamente por B5b, e a Fase C ainda não começou.
+Esse resultado confirma o comportamento operacional seguro e não integra a medição física B5a aprovada. Com esta validação, B5a está concluída. Posteriormente, B5b foi implementada como caminho separado e validada fisicamente em 22 de outubro de 2026, conforme `docs/MOTION_LATENCY_MEASUREMENT_V1.md`. A Fase B está concluída e a Fase C ainda não começou.
 
 ## Operação e arquivos
 

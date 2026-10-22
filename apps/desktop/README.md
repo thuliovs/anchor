@@ -12,7 +12,7 @@ Esta etapa ainda nao implementa:
 - autenticacao;
 - criptografia.
 
-Esta etapa agora inclui calibracao/zero offline v1, B3a/B3b, B4a/B4b e a medicao headless B5a de taxa, interarrival e variacao relativa de atraso. B5a está implementada e foi validada fisicamente em 21 de outubro de 2026. B5b não foi implementada e permanece separada.
+Esta etapa agora inclui calibracao/zero offline v1, B3a/B3b, B4a/B4b, B5a e B5b de aproximação de latência com sincronização e incerteza. B5a e B5b foram validadas fisicamente.
 
 ## Como executar
 
@@ -39,6 +39,7 @@ Gravacao headless de dataset controlado:
 ```bash
 pnpm motion:record -- --scenario stationary --duration-seconds 15
 pnpm motion:measure -- --duration-seconds 60
+pnpm motion:latency -- --duration-seconds 60 --profile <perfil.json> --policy <politica-v2.json>
 pnpm motion:analyze -- artifacts/motion-datasets/<arquivo>.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson
 pnpm motion:calibrate -- artifacts/motion-datasets/<arquivo>-stationary.ndjson --output artifacts/motion-calibrations/<perfil>.json --json
@@ -46,6 +47,8 @@ pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complemen
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<arquivo>.ndjson --profile artifacts/motion-calibrations/<perfil>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
 ```
+
+`motion:latency` usa protocolo auxiliar/socket bidirecional opt-in e atravessa diretamente o processamento B4b configurado. Os relógios monotônicos independentes não são subtraídos sem o modelo NTP-like; `RTT/2` é estimativa sob hipótese de simetria. O relatório não mede sensor → tela e não emite veredito de desempenho. Consulte `docs/MOTION_LATENCY_MEASUREMENT_V1.md`.
 
 Para ativar o diagnostico de tilt processado no desktop, inicie o app com um perfil B2 e uma politica B3b V2 compativeis:
 
@@ -69,7 +72,7 @@ Todos os 14 gates de integridade passaram. O período armado teve zero datagrama
 
 Os percentis registrados constituem a primeira baseline exploratória formal. O interarrival de recepção teve `p95 = 31.715,65 us` e `p99 = 38.971,63 us`; a variação relativa assinada de atraso teve `p95 = 14.548,2 us` e `p99 = 19.878,16 us`; a variação absoluta relativa de atraso, usada somente como proxy de jitter, teve `p95 = 17.969,45 us` e `p99 = 19.878,16 us`. Esses valores ficaram coerentes ou ligeiramente abaixo do contexto histórico, mas não são gates nem conclusão de desempenho.
 
-B5a não mediu latência de rede, latência ponta a ponta ou resposta sensor → tela, e não sustenta alegação terapêutica. B5b não foi implementada; a Fase B permanece aberta exclusivamente por B5b, e a Fase C ainda não começou.
+B5a não mediu latência de rede, latência ponta a ponta ou resposta sensor → tela, e não sustenta alegação terapêutica. B5b foi validada fisicamente em 22 de outubro de 2026: a janela de `60.000.000 us` observou `60.003.054 us`, com `3.601` amostras aceitas/processadas, `122/122` probes respondidos, zero drops e aprovação dos 26 gates. O relatório local aprovado é `artifacts/motion-latency-measurements/20261022T124629Z-b5b-v1.json`. B5b fornece aproximações com incerteza, não sensor → tela nem veredito de desempenho. A Fase B está concluída e a Fase C ainda não começou.
 
 Uma tentativa anterior sem stream, interrompida com Ctrl+C antes da primeira amostra, encerrou receiver e recorder, removeu o dataset vazio, não produziu relatório e retornou código operacional `1`. A ausência dos arquivos `20261021T151800Z` foi confirmada. Essa observação é evidência adicional de lifecycle seguro, não uma medição física aprovada.
 

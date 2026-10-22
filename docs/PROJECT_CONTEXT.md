@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 21 de outubro de 2026
-> **Estado:** plataforma de diagnóstico validada em hardware real; B5a implementada e validada fisicamente em Windows com Android standalone e receiver headless Rust
+> **Snapshot de referência:** 22 de outubro de 2026
+> **Estado:** plataforma de diagnóstico e Fase B concluídas e validadas em hardware real; Fase C ainda não iniciada
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -22,7 +22,7 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 5. o frontend Tauri exibe os dados e métricas em tempo real;
 6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e ligar o núcleo Rust puro B4a ao receiver/Tauri/UI como diagnóstico B4b.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, B3a/B3b, runtime B4b e medição headless B5a de taxa, interarrival e variação relativa. B5a está implementada e foi validada fisicamente; seus percentis constituem a primeira baseline exploratória formal, sem gates de desempenho. B5b não foi implementada. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje inclui B5a e B5b opt-in, fisicamente validadas, para medir a integridade do transporte e aproximações de latência sensor → processamento B4b com sincronização NTP-like e incerteza explícita. B5b não mede sensor → tela e não define thresholds de desempenho. A Fase B está concluída; o overlay da Fase C ainda não foi implementado.
 
 ## 2. Problema e hipótese do produto
 
@@ -560,6 +560,16 @@ B5a não mediu latência de rede, latência ponta a ponta nem resposta sensor �
 
 Antes da execução aprovada, uma tentativa sem stream foi interrompida com Ctrl+C antes da primeira amostra. O receiver e o recorder foram encerrados, o dataset vazio foi removido, nenhum relatório foi produzido e o código operacional foi `1`. Foi confirmada a ausência de `artifacts/motion-datasets/20261021T151800Z-stationary.ndjson` e `artifacts/motion-measurements/20261021T151800Z-stationary-b5a-v1.json`. Isso é evidência adicional do lifecycle operacional seguro, não uma medição física B5a aprovada.
 
+### Validação física B5b — 22 de outubro de 2026
+
+B5b foi executada em Windows com Android standalone, Wi-Fi/LAN local e receiver headless Rust, usando o pipeline B4b configurado. O relatório aprovado é `artifacts/motion-latency-measurements/20261022T124629Z-b5b-v1.json`, derivado de `artifacts/motion-latency-datasets/20261022T124629Z-b5b-v1.ndjson`; ambos permanecem locais e ignorados pelo Git. A janela solicitada de `60.000.000 us` observou `60.003.054 us`, com `3.601` amostras aceitas e processadas. Todos os 26 gates passaram.
+
+Foram reconstruídos `3.736` datagramas e `122/122` probes enviados/respondidos, sem perda ou rejeição de probe, pacote inválido, oversized, estrangeiro, duplicado/fora de ordem, sessão estrangeira, rate limiting ou drops de runtime, publicação e recorder. Doze amostras posteriores à janela nominal foram preservadas como fatos auditáveis `sample_after_window` e conciliadas no summary. O relatório preservou o perfil, a política V2 completa, o candidato `gravity_no_additional_anchor_filter` e o fingerprint B4b `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
+
+As medianas exploratórias foram `4.423,5 us` para RTT, `5.133 us` de sensor Android até preparação de envio, `159 us` do ingresso desktop até o tilt processado e `8.496,018 us` para a estimativa sensor → tilt processado. Os respectivos p95 foram `21.490,65 us`, `20.576 us`, `194 us` e `30.183,800 us`. A incerteza de sincronização teve p95 `10.745,325 us`. Esses números não são thresholds nem medem sensor → tela, renderização, resposta visual completa ou efeito clínico.
+
+A primeira execução física, `20261022T124239Z`, reprovou somente a consistência do summary e revelou que amostras posteriores à janela eram contadas pelo receiver sem fato correspondente no dataset. A CLI e o loader foram corrigidos para tornar essas chegadas explícitas e reconstruíveis; a segunda execução aprovou a correção. Os hashes SHA-256 dos artefatos aprovados são `65F1F0F0858E44B965963B32576F11BF78AB72985E3F31F9D6E1998F98BB7353` para o dataset e `0302FD8930ADABC5B69CADE46617455AFB43526B199FB250D41765B3B7894B34` para o relatório.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -723,9 +733,9 @@ Concluída em 2 de setembro de 2026.
 3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
 4. Concluído na fatia B3b: executar seleção offline V2 com as nove capturas físicas regeneradas e produzir política vinculada ao perfil B2.
 5. Concluído nas fatias B4a e B4b: definir o processamento vivo fail-closed, integrá-lo ao receiver/desktop e validá-lo fisicamente.
-6. B5a concluída: implementada e validada fisicamente para medir taxa, interarrival e variação relativa de atraso, com todos os gates de integridade aprovados e primeira baseline exploratória formal registrada. B5b permanece pendente e separada para uma aproximação defensável de latência ponta a ponta.
+6. B5a e B5b concluídas e validadas fisicamente. B5b usa caminho separado com protocolo auxiliar, sincronização, incerteza explícita e processamento B4b configurado.
 
-As fatias B1, B2, B3a, B3b, B4a, B4b e B5a estão implementadas; B4b e B5a foram validadas fisicamente. B5b não foi implementada. A Fase B permanece aberta exclusivamente por B5b. A Fase C ainda não começou.
+As fatias B1–B5b estão implementadas e validadas. A cobertura automatizada B5b inclui lifecycle, filas bounded, falhas de workers, loader estrito, contrato B4b preservado e gates compartilhados com B5a. B4b, B5a e B5b foram validadas fisicamente. A Fase B está concluída. A Fase C ainda não começou.
 
 ### Fase C — Primeiro overlay experimental
 

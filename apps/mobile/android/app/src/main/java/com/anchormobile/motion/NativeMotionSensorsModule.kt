@@ -276,6 +276,7 @@ class NativeMotionSensorsModule(
       putString("sessionId", frame.sessionId)
       putDouble("sequence", frame.sequence.toDouble())
       putDouble("sessionElapsedUs", frame.sessionElapsedUs.toDouble())
+      putDouble("sensorEventTimestampUs", frame.sensorEventTimestampUs.toDouble())
       putMap("linearAccelerationMps2", createVectorMap(frame.linearAccelerationMps2))
       putMap("gravityMps2", createVectorMap(frame.gravityMps2))
       putMap("angularVelocityRadS", createVectorMap(frame.angularVelocityRadS))

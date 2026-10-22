@@ -22,8 +22,7 @@ use anchor_desktop_lib::{
     },
     transport_measurement::{
         build_report_with_arming_counters, format_human_report as format_human_measurement_report,
-        ReceiverCounters,
-        DEFAULT_MEASUREMENT_DIRECTORY, DEFAULT_MEASUREMENT_DURATION_SECONDS,
+        ReceiverCounters, DEFAULT_MEASUREMENT_DIRECTORY, DEFAULT_MEASUREMENT_DURATION_SECONDS,
         DEFAULT_STARTUP_TIMEOUT_SECONDS,
     },
 };

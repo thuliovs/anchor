@@ -13,7 +13,11 @@ use tokio::sync::watch;
 
 pub mod calibration;
 pub mod dataset;
+pub mod latency_measurement;
+pub mod latency_recorder;
+pub mod latency_session;
 pub mod live_motion;
+pub mod measurement_integrity;
 pub mod motion_filtering;
 pub mod protocol;
 pub mod receiver;

@@ -22,6 +22,7 @@ export type NativeMotionFrame = {
   sessionId: string;
   sequence: number;
   sessionElapsedUs: number;
+  sensorEventTimestampUs?: number;
   linearAccelerationMps2: Vector3;
   gravityMps2: Vector3;
   angularVelocityRadS: Vector3;

@@ -13,6 +13,7 @@
     "test:mobile:standalone-scripts": "node --test \"scripts/mobile/standalone-utils.test.cjs\"",
     "motion:record": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- record",
     "motion:measure": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- measure",
+    "motion:latency": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-latency --",
     "motion:analyze": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- analyze",
     "motion:calibrate": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- calibrate",
     "motion:evaluate": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin anchor-motion-dataset -- evaluate",
