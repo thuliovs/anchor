@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 22 de outubro de 2026
-> **Estado:** plataforma de diagnóstico e Fase B concluídas e validadas em hardware real; Fase C ainda não iniciada
+> **Snapshot de referência:** 23 de outubro de 2026
+> **Estado:** plataforma de diagnóstico, Fase B e C1 concluídas; overlay C1 fisicamente validado no Windows
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -22,7 +22,7 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 5. o frontend Tauri exibe os dados e métricas em tempo real;
 6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e ligar o núcleo Rust puro B4a ao receiver/Tauri/UI como diagnóstico B4b.
 
-O que existe hoje inclui B5a e B5b opt-in, fisicamente validadas, para medir a integridade do transporte e aproximações de latência sensor → processamento B4b com sincronização NTP-like e incerteza explícita. B5b não mede sensor → tela e não define thresholds de desempenho. A Fase B está concluída; o overlay da Fase C ainda não foi implementado.
+O que existe hoje inclui B5a e B5b opt-in, fisicamente validadas, para medir a integridade do transporte e aproximações de latência sensor → processamento B4b com sincronização NTP-like e incerteza explícita. B5b não mede sensor → tela e não define thresholds de desempenho. A Fase B está concluída. A infraestrutura C1 também foi concluída e fisicamente validada no Windows; o overlay continua estático e provisório, sem movimento real.
 
 ## 2. Problema e hipótese do produto
 
@@ -291,6 +291,18 @@ A visualização atual move um marcador diretamente com `linearAccelerationMps2.
 
 O frontend de diagnóstico mostra `Receptor UDP (todas as interfaces IPv4, porta 57421)`, coerente com o bind real em `0.0.0.0:57421`.
 
+### Infraestrutura de overlay C1
+
+O desktop cria sob demanda uma segunda webview com label único `overlay`. No Windows ela é transparente, sem decoração, always-on-top, fora da barra de tarefas e dimensionada pela work area da tela principal. O backend Rust mantém a fonte de verdade de aberto/fechado, modo e último erro. Abrir entra sempre em configuração; operação ativa click-through. Fechar esconde e reutiliza a mesma janela, impedindo duplicatas.
+
+O tray oferece recuperação independente da webview: mostrar diagnóstico, retornar o overlay à configuração, fechar overlay e sair. Falha ao alternar input esconde a janela, em vez de deixá-la bloqueando o usuário. Plataformas fora de Windows ficam explicitamente indisponíveis e fail-closed até validação própria. O visual C1 é apenas uma moldura/mira estática identificada; não consome `targetTilt` e não implementa C2, interpolação ou suavização.
+
+A primeira validação física, em 23 de outubro de 2026, falhou: `WebviewWindowBuilder::build()` era chamado por um comando Tauri síncrono e bloqueou no Windows, sem resposta ao frontend. A correção torna `open_overlay` assíncrono e executa criação/configuração em `spawn_blocking`, fora da main event loop. O mutex de estado é usado somente para transições curtas `closed → opening → open/closed`; não fica retido durante APIs de janela. O backend invalida a tentativa após 8 segundos e o frontend aplica timeout de 10 segundos, sempre libera o pending local e mostra erro de recuperação. Gerações impedem abertura concorrente e permitem que fechar ou timeout cancelem logicamente uma criação tardia.
+
+Testes automatizados validam a máquina de estados, cancelamento de geração, prevenção de abertura concorrente e timeout do frontend. Eles não criam uma WebView2 real e, portanto, não comprovam transparência, always-on-top, click-through ou ausência de deadlock no Windows. Essas propriedades foram comprovadas pela revalidação física aprovada em 23 de outubro de 2026.
+
+Na revalidação, a janela principal continuou funcionando, `opening` retornou normalmente, a segunda janela apareceu sem timeout e transparência, ausência de decoração, always-on-top e work area foram confirmados. A moldura/mira provisória apareceu, configuração recebeu mouse e operação permitiu interação com outros aplicativos por click-through. O tray recuperou configuração e fechou o overlay; três ciclos abrir/fechar não criaram duplicatas e sempre reabriram em configuração. Fechar preservou o diagnóstico e `Sair` encerrou o processo sem janelas remanescentes. Com isso, C1 foi concluída. Linux e macOS continuam sem validação.
+
 ### Calibração offline v1
 
 O desktop agora possui um módulo Rust dedicado em `apps/desktop/src-tauri/src/calibration/` para uma operação offline, determinística e versionada de calibração/zero a partir de datasets `stationary`.
@@ -353,7 +365,7 @@ Os limites de `100 ms` e duas amostras são políticas iniciais de engenharia, n
 
 B4b adiciona uma camada runtime separada em `live_motion::runtime`: carrega explicitamente `ANCHOR_CALIBRATION_PROFILE_PATH` e `ANCHOR_TILT_POLICY_PATH`, cria o `LiveMotionPipeline`, recebe somente `AcceptedSampleEvent` publicados pelo receiver, usa fila bounded com `try_send` e processa eventos em um worker dedicado. Configuração ausente ou inválida deixa o pipeline `unavailable` e `targetTilt` neutro, sem impedir o receiver UDP de iniciar.
 
-O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. A integração foi validada fisicamente; continuam fora de escopo overlay, janela transparente, click-through e medição formal de latência ponta a ponta.
+O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. Na fatia B4b, overlay, janela transparente, click-through e medição formal de latência ponta a ponta permaneciam fora de escopo; C1 adicionou depois apenas a infraestrutura de janela, sem conectar `targetTilt`.
 
 ### Avaliacao offline de filtros B3a
 
@@ -669,11 +681,10 @@ cd apps/mobile/android
 
 ## 13. O que ainda não existe
 
-- horizonte artificial/overlay final;
-- janela transparente, always-on-top e click-through;
+- horizonte artificial/overlay final e movimento C2 conectado ao modelo de tilt;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
-- medição formal de latência ponta a ponta e de jitter absoluto;
+- medição formal sensor → tela, latência ponta a ponta e jitter absoluto;
 - descoberta automática do desktop;
 - pareamento, autenticação ou criptografia;
 - ACK ou canal de controle;
@@ -713,7 +724,7 @@ O stream deliberadamente não confirma entrega. Um futuro canal de controle pode
 
 ### Portabilidade
 
-O objetivo inclui Windows e Linux. A validação física cobre Android + Linux no fluxo anterior e Android standalone + Windows na integração B4b; transparência e click-through variam entre Windows, X11 e Wayland e precisam de protótipos por plataforma.
+O objetivo inclui Windows e Linux. A validação física cobre Android + Linux no fluxo anterior, Android standalone + Windows na integração B4b e transparência/click-through C1 no Windows. X11 e Wayland continuam sem validação e precisam de protótipos próprios.
 
 ## 15. Próximas fases recomendadas
 
@@ -735,13 +746,13 @@ Concluída em 2 de setembro de 2026.
 5. Concluído nas fatias B4a e B4b: definir o processamento vivo fail-closed, integrá-lo ao receiver/desktop e validá-lo fisicamente.
 6. B5a e B5b concluídas e validadas fisicamente. B5b usa caminho separado com protocolo auxiliar, sincronização, incerteza explícita e processamento B4b configurado.
 
-As fatias B1–B5b estão implementadas e validadas. A cobertura automatizada B5b inclui lifecycle, filas bounded, falhas de workers, loader estrito, contrato B4b preservado e gates compartilhados com B5a. B4b, B5a e B5b foram validadas fisicamente. A Fase B está concluída. A Fase C ainda não começou.
+As fatias B1–B5b estão implementadas e validadas. A cobertura automatizada B5b inclui lifecycle, filas bounded, falhas de workers, loader estrito, contrato B4b preservado e gates compartilhados com B5a. B4b, B5a e B5b foram validadas fisicamente. A Fase B está concluída. C1 também foi concluída após a correção assíncrona e a revalidação física aprovada no Windows em 23 de outubro de 2026.
 
 ### Fase C — Primeiro overlay experimental
 
-1. Criar uma janela transparente e always-on-top.
-2. Implementar click-through com modo explícito de configuração.
-3. Renderizar um estímulo mínimo baseado no modelo definido na fase anterior.
+1. Concluído e validado fisicamente na C1: janela transparente, sem decoração, always-on-top e ajustada à work area no Windows.
+2. Concluído e validado fisicamente na C1: click-through, configuração explícita, recuperação pelo tray, janela única e lifecycle seguro.
+3. C2 ainda não iniciada: renderizar um estímulo mínimo baseado no modelo definido na fase anterior.
 4. Separar taxa de renderização da taxa do sensor e interpolar quando necessário.
 5. Adicionar limites de amplitude, suavização e retorno seguro ao neutro.
 

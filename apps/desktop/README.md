@@ -1,6 +1,6 @@
 # Anchor Desktop
 
-Fatia vertical de comunicacao local do Anchor entre Android e desktop.
+Aplicação desktop de diagnóstico do Anchor e infraestrutura experimental do overlay C1.
 
 ## Escopo atual
 
@@ -8,11 +8,56 @@ O desktop inicia um receptor UDP em `0.0.0.0:57421`, aceita trafego em todas as 
 
 Esta etapa ainda nao implementa:
 
-- overlay visual;
+- movimento ou desenho final do overlay (C2+);
 - autenticacao;
 - criptografia.
 
 Esta etapa agora inclui calibracao/zero offline v1, B3a/B3b, B4a/B4b, B5a e B5b de aproximação de latência com sincronização e incerteza. B5a e B5b foram validadas fisicamente.
+
+## Overlay experimental C1
+
+**Status:** C1 concluída e fisicamente validada no Windows em 23 de outubro de 2026.
+
+A janela principal continua sendo o diagnóstico. No Windows, a seção “Overlay experimental C1” controla uma segunda janela transparente, sem decoração, always-on-top e ajustada à área útil da tela principal (exclui a barra de tarefas):
+
+- **configuração**: recebe mouse, mostra coordenadas e oferece controles locais;
+- **operação**: usa click-through e não deve bloquear outros aplicativos;
+- abrir sempre restaura o modo seguro de configuração;
+- fechar esconde e neutraliza a janela reutilizável, evitando duplicatas;
+- o backend Rust é a fonte de verdade do estado; React apenas consulta e observa eventos;
+- o conteúdo com moldura tracejada, mira e rótulo `ANCHOR OVERLAY C1 · PROVISÓRIO` serve somente para validar geometria, transparência e modos;
+- nenhum conteúdo do overlay lê `targetTilt` e não há interpolação, suavização ou estímulo definitivo.
+
+`open_overlay` é um comando Tauri assíncrono. A operação bloqueante de criação/configuração da WebView é executada por `tauri::async_runtime::spawn_blocking`, fora do comando síncrono e da main event loop do Windows. O estado passa brevemente por `opening`, sem manter seu mutex durante `WebviewWindowBuilder::build()`, posicionamento, configuração de input ou exibição. Chamadas concorrentes não iniciam uma segunda geração de janela.
+
+O backend limita a tentativa de abertura a 8 segundos e responde com falha controlada, invalidando somente aquela geração. O frontend limita cada comando do overlay a 10 segundos. Se nem o backend responder, o estado pending local é encerrado, os controles são reabilitados e uma mensagem orienta a recuperação. Timeouts não tentam cancelar à força uma operação nativa já iniciada; a geração de abertura e o comando de fechar garantem que uma abertura cancelada seja escondida ao terminar.
+
+Em 23 de outubro de 2026, a primeira tentativa de validação física C1 falhou porque a criação da WebView era feita dentro de um comando Tauri síncrono, causando deadlock no Windows: controles bloqueados, estado fechado e ausência de janela/erro. Essa implementação foi removida. Após a correção assíncrona, a revalidação física obrigatória foi aprovada no mesmo dia. Testes unitários cobrem lifecycle e timeout, mas não instanciam WebView2; a evidência física Windows continua sendo necessária para propriedades nativas de janela.
+
+Na revalidação aprovada, a janela principal permaneceu funcional, o estado passou por `Abrindo…`, a segunda janela apareceu sem timeout e transparência, ausência de decoração, always-on-top e work area funcionaram. Configuração recebeu mouse, operação permitiu click-through, o tray recuperou e fechou o overlay, três ciclos de reabertura não criaram duplicatas e sempre começaram em configuração, fechar preservou o diagnóstico e `Sair` encerrou o processo sem janelas remanescentes.
+
+### Recuperação e encerramento
+
+Quando o overlay está em operação, use o ícone do Anchor na bandeja do Windows:
+
+- `Recuperar overlay (configuração)` desativa click-through;
+- `Fechar overlay` esconde o overlay mesmo durante click-through;
+- `Mostrar diagnóstico` traz a janela principal para frente;
+- `Sair` encerra pelo lifecycle normal e limpa receiver, runtime de tilt e janelas.
+
+Se uma mudança de modo não puder ser aplicada, o backend esconde o overlay (fail-closed) e expõe o erro na janela principal. A C1 habilita o overlay somente no Windows. Linux, macOS e outras plataformas mantêm o diagnóstico funcionando, mas retornam estado explicitamente indisponível, pois transparência/click-through ainda não foram validados nelas.
+
+### Checklist manual C1 no Windows
+
+1. Execute `pnpm dev:desktop` e confirme que a janela “Anchor - Diagnóstico de Movimento” abre e o diagnóstico existente continua atualizando.
+2. Clique `Abrir overlay`; confirme que o estado passa por `Abrindo…`, retorna antes de 10 segundos e não aparece mensagem de timeout.
+3. Confirme moldura/mira provisórias, fundo transparente, ausência de decoração, cobertura apenas da área útil da tela principal e conteúdo acima de outro aplicativo.
+4. Mova o mouse e confirme que as coordenadas mudam no modo configuração.
+5. Clique `Ativar click-through`; confirme na janela principal (ou reabra-a pela bandeja) o estado “Operação” e interaja com outro aplicativo através do overlay.
+6. Na bandeja, escolha `Recuperar overlay (configuração)` e confirme que o overlay volta a receber mouse; depois teste `Fechar overlay` enquanto estiver novamente em operação.
+7. Repita abrir/fechar três vezes e confirme uma única janela visual, sempre reabrindo em configuração.
+8. Feche apenas o overlay pelos controles e confirme que o diagnóstico permanece aberto.
+9. Abra o overlay novamente, escolha `Sair` na bandeja e confirme no Gerenciador de Tarefas que o processo Anchor encerrou sem janelas remanescentes.
 
 ## Como executar
 
@@ -72,7 +117,7 @@ Todos os 14 gates de integridade passaram. O período armado teve zero datagrama
 
 Os percentis registrados constituem a primeira baseline exploratória formal. O interarrival de recepção teve `p95 = 31.715,65 us` e `p99 = 38.971,63 us`; a variação relativa assinada de atraso teve `p95 = 14.548,2 us` e `p99 = 19.878,16 us`; a variação absoluta relativa de atraso, usada somente como proxy de jitter, teve `p95 = 17.969,45 us` e `p99 = 19.878,16 us`. Esses valores ficaram coerentes ou ligeiramente abaixo do contexto histórico, mas não são gates nem conclusão de desempenho.
 
-B5a não mediu latência de rede, latência ponta a ponta ou resposta sensor → tela, e não sustenta alegação terapêutica. B5b foi validada fisicamente em 22 de outubro de 2026: a janela de `60.000.000 us` observou `60.003.054 us`, com `3.601` amostras aceitas/processadas, `122/122` probes respondidos, zero drops e aprovação dos 26 gates. O relatório local aprovado é `artifacts/motion-latency-measurements/20261022T124629Z-b5b-v1.json`. B5b fornece aproximações com incerteza, não sensor → tela nem veredito de desempenho. A Fase B está concluída e a Fase C ainda não começou.
+B5a não mediu latência de rede, latência ponta a ponta ou resposta sensor → tela, e não sustenta alegação terapêutica. B5b foi validada fisicamente em 22 de outubro de 2026: a janela de `60.000.000 us` observou `60.003.054 us`, com `3.601` amostras aceitas/processadas, `122/122` probes respondidos, zero drops e aprovação dos 26 gates. O relatório local aprovado é `artifacts/motion-latency-measurements/20261022T124629Z-b5b-v1.json`. B5b fornece aproximações com incerteza, não sensor → tela nem veredito de desempenho. A Fase B está concluída e a infraestrutura C1 foi fisicamente validada no Windows em 23 de outubro de 2026.
 
 Uma tentativa anterior sem stream, interrompida com Ctrl+C antes da primeira amostra, encerrou receiver e recorder, removeu o dataset vazio, não produziu relatório e retornou código operacional `1`. A ausência dos arquivos `20261021T151800Z` foi confirmada. Essa observação é evidência adicional de lifecycle seguro, não uma medição física aprovada.
 
@@ -135,7 +180,7 @@ Em 20 de outubro de 2026, B4b foi validada fisicamente em Windows com APK Androi
 
 Ao interromper a transmissao, o pipeline chegou a `disconnected` em aproximadamente `1 s`, neutralizando a saida utilizavel e preservando somente a ultima estimativa diagnostica. Uma nova sessao recuperou para `valid`. Na observacao final, houve `22856` datagramas recebidos e `22856` amostras aceitas, sem rejeicoes do receiver nem descartes de ingresso. Idades locais de poucos milissegundos observadas no snapshot nao sao latencia ponta a ponta.
 
-Nao ha overlay transparente, janela always-on-top/click-through, suavizacao visual adicional, teste em veiculo, alegacao de reducao de cinetose ou medicao formal de taxa, jitter e latencia ponta a ponta nesta fatia.
+B4b não conecta sua saída ao overlay C1. Não há movimento visual real, suavização visual adicional, teste em veículo, alegação de redução de cinetose ou medição formal sensor → tela nesta fatia.
 
 Limites iniciais: `100 ms` para gap continuo, duas amostras de warm-up, stale acima de `250 ms` e disconnected acima de `1 s`. Os dois primeiros sao politicas iniciais de engenharia.
 

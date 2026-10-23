@@ -31,6 +31,15 @@ import {
   type ReceiverSnapshotDto,
 } from "./diagnostics";
 import "./App.css";
+import {
+  EMPTY_OVERLAY_SNAPSHOT,
+  getOverlayStatusLabel,
+  OVERLAY_COMMAND_TIMEOUT_MS,
+  OVERLAY_STATE_EVENT,
+  withTimeout,
+  type OverlayMode,
+  type OverlaySnapshotDto,
+} from "./overlay";
 
 const VISUAL_RADIUS_PX = 108;
 
@@ -42,6 +51,10 @@ function App() {
     useState<LiveTiltSnapshotDto>(EMPTY_LIVE_TILT_SNAPSHOT);
   const [errors, setErrors] =
     useState<DiagnosticErrorState>(EMPTY_DIAGNOSTIC_ERRORS);
+  const [overlay, setOverlay] = useState<OverlaySnapshotDto>(EMPTY_OVERLAY_SNAPSHOT);
+  const [overlayPending, setOverlayPending] = useState(false);
+  const [overlayCommandError, setOverlayCommandError] = useState<string | null>(null);
+  const [overlayReadError, setOverlayReadError] = useState<string | null>(null);
 
   useEffect(() => {
     let isDisposed = false;
@@ -57,9 +70,11 @@ function App() {
         const result: {
           nextReceiverSnapshot?: ReceiverSnapshotDto;
           nextTiltSnapshot?: LiveTiltSnapshotDto;
+          nextOverlaySnapshot?: OverlaySnapshotDto;
           receiverError: string | null;
           tiltError: string | null;
-        } = { receiverError: null, tiltError: null };
+          overlayError: string | null;
+        } = { receiverError: null, tiltError: null, overlayError: null };
         try {
           result.nextReceiverSnapshot = await invoke<ReceiverSnapshotDto>(
             "get_receiver_snapshot",
@@ -74,9 +89,23 @@ function App() {
         } catch (error) {
           result.tiltError = `Tilt processado indisponível: ${String(error)}`;
         }
+        try {
+          result.nextOverlaySnapshot = await invoke<OverlaySnapshotDto>(
+            "get_overlay_snapshot",
+          );
+        } catch (error) {
+          result.overlayError = `Estado do overlay indisponível: ${String(error)}`;
+        }
         return result;
       },
-      onSuccess: ({ nextReceiverSnapshot, nextTiltSnapshot, receiverError, tiltError }) => {
+      onSuccess: ({
+        nextReceiverSnapshot,
+        nextTiltSnapshot,
+        nextOverlaySnapshot,
+        receiverError,
+        tiltError,
+        overlayError,
+      }) => {
         if (isDisposed) {
           return;
         }
@@ -87,6 +116,10 @@ function App() {
         if (nextTiltSnapshot) {
           setTiltSnapshot(nextTiltSnapshot);
         }
+        if (nextOverlaySnapshot) {
+          setOverlay(nextOverlaySnapshot);
+        }
+        setOverlayReadError(overlayError);
         setErrors((current) =>
           setTiltSnapshotError(setSnapshotError(current, receiverError), tiltError),
         );
@@ -143,6 +176,54 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<OverlaySnapshotDto>(OVERLAY_STATE_EVENT, (event) => {
+      if (!disposed) setOverlay(event.payload);
+    })
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setOverlayReadError(`Eventos do overlay indisponíveis: ${String(error)}`);
+        }
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const runOverlayCommand = async (
+    command: "open_overlay" | "close_overlay" | "set_overlay_mode",
+    mode?: OverlayMode,
+  ) => {
+    setOverlayPending(true);
+    setOverlayCommandError(null);
+    try {
+      const next = await withTimeout(
+        invoke<OverlaySnapshotDto>(
+          command,
+          mode === undefined ? undefined : { mode },
+        ),
+        OVERLAY_COMMAND_TIMEOUT_MS,
+        {
+          schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+          cancel: (handle) => window.clearTimeout(handle),
+        },
+        `O backend não respondeu ao comando ${command} em ${OVERLAY_COMMAND_TIMEOUT_MS / 1000} segundos. Os controles foram reabilitados; use “Fechar overlay” ou a bandeja para recuperação.`,
+      );
+      setOverlay(next);
+    } catch (error) {
+      setOverlayCommandError(`Falha no overlay: ${String(error)}`);
+    } finally {
+      setOverlayPending(false);
+    }
+  };
+
   const displayedSample = getDisplayedSample(
     snapshot.status,
     liveSample,
@@ -173,6 +254,72 @@ function App() {
       {errors.tiltSnapshotError ? (
         <p className="bridge-error">{errors.tiltSnapshotError}</p>
       ) : null}
+      {overlayCommandError || overlayReadError || overlay.lastError ? (
+        <p className="bridge-error">
+          {overlayCommandError ?? overlayReadError ?? overlay.lastError}
+        </p>
+      ) : null}
+
+      <section className="overlay-controls panel" aria-labelledby="overlay-controls-title">
+        <div className="panel__heading">
+          <h2 id="overlay-controls-title">Overlay experimental C1</h2>
+          <p>Estado mantido pelo backend Rust; sem conexão com targetTilt nesta fatia.</p>
+        </div>
+        <div className="overlay-controls__status">
+          <strong>{getOverlayStatusLabel(overlay)}</strong>
+          <span>
+            {overlay.lifecycle === "opening"
+              ? "Criação em andamento"
+              : overlay.isOpen
+                ? "Janela ativa"
+                : "Janela inativa"}
+          </span>
+        </div>
+        <div className="overlay-controls__actions">
+          <button
+            type="button"
+            disabled={overlayPending || !overlay.supported || overlay.lifecycle === "open"}
+            onClick={() => void runOverlayCommand("open_overlay")}
+          >
+            Abrir overlay
+          </button>
+          <button
+            type="button"
+            disabled={
+              overlayPending || overlay.lifecycle !== "open" || overlay.mode === "configuration"
+            }
+            onClick={() => void runOverlayCommand("set_overlay_mode", "configuration")}
+          >
+            Modo configuração
+          </button>
+          <button
+            type="button"
+            disabled={
+              overlayPending || overlay.lifecycle !== "open" || overlay.mode === "operation"
+            }
+            onClick={() => void runOverlayCommand("set_overlay_mode", "operation")}
+          >
+            Modo operação
+          </button>
+          <button
+            type="button"
+            className="button--danger"
+            disabled={overlayPending || overlay.lifecycle === "closed"}
+            onClick={() => void runOverlayCommand("close_overlay")}
+          >
+            Fechar overlay
+          </button>
+        </div>
+        {!overlay.supported ? (
+          <p className="overlay-controls__note">
+            Fail-closed: C1 habilita transparência e click-through apenas no Windows.
+          </p>
+        ) : (
+          <p className="overlay-controls__note">
+            Recuperação: use o ícone do Anchor na bandeja para voltar à configuração ou fechar.
+          </p>
+        )}
+      </section>
 
       <section className="layout-grid">
         <article className="panel panel--visual">

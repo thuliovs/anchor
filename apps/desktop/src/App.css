@@ -31,6 +31,29 @@ input {
   font: inherit;
 }
 
+button {
+  padding: 0.65rem 0.9rem;
+  border: 1px solid rgba(156, 192, 255, 0.35);
+  border-radius: 0.7rem;
+  background: rgba(68, 120, 255, 0.22);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(68, 120, 255, 0.38);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.button--danger {
+  border-color: rgba(240, 139, 139, 0.45);
+  background: rgba(150, 45, 45, 0.24);
+}
+
 #root {
   min-height: 100vh;
 }
@@ -122,6 +145,108 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.overlay-controls {
+  margin-bottom: 1rem;
+}
+
+.overlay-controls__status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.overlay-controls__status span,
+.overlay-controls__note {
+  color: #91a7c2;
+  font-size: 0.88rem;
+}
+
+.overlay-controls__actions,
+.overlay__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.overlay-document,
+.overlay-document body,
+.overlay-document #root {
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  color: #f3f8ff;
+  background: transparent;
+  user-select: none;
+}
+
+.overlay--configuration {
+  background: rgba(42, 104, 185, 0.055);
+}
+
+.overlay__frame {
+  position: absolute;
+  inset: 12px;
+  border: 2px dashed rgba(86, 206, 255, 0.78);
+  box-shadow: inset 0 0 28px rgba(86, 206, 255, 0.12);
+}
+
+.overlay__crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 195, 75, 0.9);
+  border-radius: 50%;
+}
+
+.overlay__crosshair::before,
+.overlay__crosshair::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(255, 195, 75, 0.9);
+  transform: translate(-50%, -50%);
+}
+
+.overlay__crosshair::before { width: 70px; height: 2px; }
+.overlay__crosshair::after { width: 2px; height: 70px; }
+
+.overlay__badge {
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: min(460px, calc(100vw - 64px));
+  padding: 0.8rem 1rem;
+  transform: translateX(-50%);
+  border: 1px solid rgba(113, 207, 255, 0.6);
+  border-radius: 0.8rem;
+  background: rgba(5, 18, 34, 0.82);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.32);
+  text-align: center;
+}
+
+.overlay--operation .overlay__badge {
+  opacity: 0.72;
+}
+
+.overlay__actions {
+  justify-content: center;
+}
+
+.overlay__error {
+  color: #ffc3c3;
 }
 
 .panel {
