@@ -1,3 +1,5 @@
+pub mod provenance;
+
 use crate::{
     dataset::{
         analyze_dataset_str, load_validated_dataset_str, DatasetAnalysis, DatasetAnalysisError,
@@ -231,6 +233,14 @@ pub fn load_calibration_profile_str(
         .map_err(|err| CalibrationError::InvalidProfile(err.to_string()))?;
     validate_profile(&mut profile)?;
     Ok(profile)
+}
+
+pub fn validated_calibration_profile(
+    profile: &CalibrationProfileV1,
+) -> Result<CalibrationProfileV1, CalibrationError> {
+    let mut validated = profile.clone();
+    validate_profile(&mut validated)?;
+    Ok(validated)
 }
 
 pub fn write_calibration_profile_file(
@@ -1059,7 +1069,10 @@ fn validate_gravity_angular_error_stats(
     Ok(())
 }
 
-fn validate_finite_vector(value: &Vector3, field_name: &str) -> Result<(), CalibrationError> {
+pub(crate) fn validate_finite_vector(
+    value: &Vector3,
+    field_name: &str,
+) -> Result<(), CalibrationError> {
     validate_finite_f64(value.x, &format!("{field_name}.x"))?;
     validate_finite_f64(value.y, &format!("{field_name}.y"))?;
     validate_finite_f64(value.z, &format!("{field_name}.z"))?;
@@ -1477,7 +1490,7 @@ fn add_vectors(first: &Vector3, second: &Vector3) -> Vector3 {
     }
 }
 
-fn subtract_vectors(first: &Vector3, second: &Vector3) -> Vector3 {
+pub(crate) fn subtract_vectors(first: &Vector3, second: &Vector3) -> Vector3 {
     Vector3 {
         x: first.x - second.x,
         y: first.y - second.y,
@@ -1607,7 +1620,7 @@ impl UnitQuaternion {
         }))
     }
 
-    fn rotate_vector(&self, value: &Vector3) -> Vector3 {
+    pub(crate) fn rotate_vector(&self, value: &Vector3) -> Vector3 {
         let qv = Vector3 {
             x: self.x,
             y: self.y,

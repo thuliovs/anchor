@@ -49,7 +49,22 @@ export interface MotionCaptureSnapshot {
   transportState: 'idle' | 'opening' | 'socket_ready' | 'sending' | 'error';
   transportDestination: UdpDestination | null;
   transportMetrics: SequentialUdpSenderMetrics;
+  latencyMeasurementMode?: boolean;
+  measurementId?: string | null;
+  latencyTransportMetrics: LatencyTransportMetrics;
 }
+
+export interface LatencyTransportMetrics {
+  offeredSamples: number;
+  sentSamples: number;
+  droppedBackpressure: number;
+  rejectedSamples: number;
+  sendErrors: number;
+}
+
+const emptyLatencyTransportMetrics = (): LatencyTransportMetrics => ({
+  offeredSamples: 0, sentSamples: 0, droppedBackpressure: 0, rejectedSamples: 0, sendErrors: 0,
+});
 
 interface AppStateSubscription {
   remove(): void;
@@ -139,6 +154,9 @@ export class MotionCaptureController {
     transportState: 'idle',
     transportDestination: null,
     transportMetrics: emptyTransportMetrics(),
+    latencyMeasurementMode: false,
+    measurementId: null,
+    latencyTransportMetrics: emptyLatencyTransportMetrics(),
   };
 
   private initialized = false;
@@ -152,6 +170,9 @@ export class MotionCaptureController {
   private captureGeneration = 0;
   private activeCaptureGeneration: number | null = null;
   private pendingStartGeneration: number | null = null;
+  private latencyMode = false;
+  private latencySendInFlight = false;
+  private pendingLatency: { payload: string; sensorUs: number } | null = null;
 
   constructor(options: MotionCaptureControllerOptions = {}) {
     this.nativeModule = options.nativeModule ?? getMotionSensorsModule();
@@ -235,7 +256,7 @@ export class MotionCaptureController {
     }
   }
 
-  async startCapture(destination?: UdpDestination): Promise<void> {
+  async startCapture(destination?: UdpDestination, latencyMeasurementMode = false): Promise<void> {
     if (this.disposed || !this.nativeModule || !this.udpSender) {
       this.updateSnapshot({
         status: 'unsupported',
@@ -268,6 +289,12 @@ export class MotionCaptureController {
     }
 
     const generation = this.nextCaptureGeneration();
+    if (latencyMeasurementMode && !this.udpModule?.openLatency) {
+      this.updateSnapshot({ status: 'error', errorMessage: 'Modo B5b indisponivel neste build.' });
+      return;
+    }
+    this.latencyMode = latencyMeasurementMode;
+    const measurementId = latencyMeasurementMode ? createMeasurementId() : null;
     this.captureActive = true;
     this.activeCaptureGeneration = generation;
     this.pendingStartGeneration = generation;
@@ -289,10 +316,17 @@ export class MotionCaptureController {
       transportState: 'opening',
       transportDestination: validation.destination,
       transportMetrics: emptyTransportMetrics(),
+      latencyMeasurementMode,
+      measurementId,
+      latencyTransportMetrics: emptyLatencyTransportMetrics(),
     });
 
     try {
-      await this.udpSender.open(validation.destination);
+      if (latencyMeasurementMode) {
+        await this.udpModule!.openLatency!(validation.destination.host, validation.destination.port, measurementId!);
+      } else {
+        await this.udpSender.open(validation.destination);
+      }
       if (!this.isCurrentCaptureGeneration(generation)) {
         return;
       }
@@ -319,9 +353,10 @@ export class MotionCaptureController {
       }
 
       this.pendingStartGeneration = null;
-      if (this.udpSender.getSnapshot().state === 'open') {
+      if (!latencyMeasurementMode && this.udpSender.getSnapshot().state === 'open') {
         this.udpSender.close();
       }
+      this.udpModule?.closeLatency?.();
       this.teardownCaptureRuntime();
       this.activeCaptureGeneration = null;
       this.updateSnapshot({
@@ -347,6 +382,7 @@ export class MotionCaptureController {
       this.nativeModule.stop();
     }
     this.udpSender?.close();
+    this.udpModule?.closeLatency?.();
 
     this.teardownCaptureRuntime();
 
@@ -395,7 +431,14 @@ export class MotionCaptureController {
 
     try {
       const datagram = serializeMotionSampleV1Datagram(converted.sample);
-      this.udpSender?.offerDatagram(datagram.payload);
+      if (this.latencyMode) {
+        if (typeof frame.sensorEventTimestampUs !== 'number') {
+          throw new Error('Timestamp monotonic absoluto do sensor indisponivel para B5b.');
+        }
+        this.offerLatency(datagram.payload, frame.sensorEventTimestampUs);
+      } else {
+        this.udpSender?.offerDatagram(datagram.payload);
+      }
     } catch (error) {
       this.udpSender?.recordRejectedPayload(error);
       this.snapshot = {
@@ -468,6 +511,55 @@ export class MotionCaptureController {
     this.lastFrameReceivedAtMs = null;
     this.captureStartRequestedAtMs = null;
     this.rateTracker.reset();
+    this.latencyMode = false;
+    this.latencySendInFlight = false;
+    this.pendingLatency = null;
+  }
+
+  private offerLatency(payload: string, sensorUs: number, countOffer = true): void {
+    const generation = this.activeCaptureGeneration;
+    if (countOffer) this.snapshot = {...this.snapshot, latencyTransportMetrics: {
+        ...this.snapshot.latencyTransportMetrics,
+        offeredSamples: this.snapshot.latencyTransportMetrics.offeredSamples + 1,
+      }};
+    if (generation === null || !this.udpModule?.sendLatency) {
+      this.snapshot = {...this.snapshot, latencyTransportMetrics: {
+        ...this.snapshot.latencyTransportMetrics,
+        rejectedSamples: this.snapshot.latencyTransportMetrics.rejectedSamples + 1,
+      }};
+      return;
+    }
+    if (this.latencySendInFlight) {
+      if (this.pendingLatency !== null) {
+        this.snapshot = {...this.snapshot, latencyTransportMetrics: {
+          ...this.snapshot.latencyTransportMetrics,
+          droppedBackpressure: this.snapshot.latencyTransportMetrics.droppedBackpressure + 1,
+        }};
+      }
+      this.pendingLatency = { payload, sensorUs };
+      return;
+    }
+    this.latencySendInFlight = true;
+    this.udpModule.sendLatency(payload, sensorUs).then(() => {
+      if (this.isCurrentCaptureGeneration(generation)) this.snapshot = {...this.snapshot, latencyTransportMetrics: {
+        ...this.snapshot.latencyTransportMetrics,
+        sentSamples: this.snapshot.latencyTransportMetrics.sentSamples + 1,
+      }};
+    }).catch(error => {
+      if (this.isCurrentCaptureGeneration(generation)) {
+        this.snapshot = {...this.snapshot, latencyTransportMetrics: {
+          ...this.snapshot.latencyTransportMetrics,
+          sendErrors: this.snapshot.latencyTransportMetrics.sendErrors + 1,
+        }};
+        this.handleTransportError(error);
+      }
+    }).finally(() => {
+      if (!this.isCurrentCaptureGeneration(generation)) return;
+      this.latencySendInFlight = false;
+      const next = this.pendingLatency;
+      this.pendingLatency = null;
+      if (next && this.captureActive && this.latencyMode) this.offerLatency(next.payload, next.sensorUs, false);
+    });
   }
 
   private handleTransportError(error: Error): void {
@@ -593,4 +685,9 @@ function emptyTransportMetrics(): SequentialUdpSenderMetrics {
     sendErrors: 0,
     lastTransportError: null,
   };
+}
+
+function createMeasurementId(): string {
+  const cryptoLike = globalThis as { crypto?: { randomUUID?: () => string } };
+  return cryptoLike.crypto?.randomUUID?.() ?? `b5b-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }

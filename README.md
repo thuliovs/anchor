@@ -1,56 +1,93 @@
 # Anchor
 
-**A cross-platform motion pipeline that turns Android sensor data into a reliable desktop stream.**
+**An experimental motion-aware desktop system that turns Android sensor data into a low-latency visual reference.**
 
-Anchor captures real motion samples on Android, sends them over the local network, and processes them in a Rust-powered desktop application. The project explores sensor calibration, real-time transport, motion filtering, and reproducible offline evaluation.
+Anchor investigates whether a subtle visual reference synchronized with a vehicle's movement can help reduce the sensory conflict people may experience when using a computer in a car, bus, or train.
 
-> Current status: active prototype. The data pipeline, diagnostics, calibration, and filter evaluation are implemented; authentication, encryption, automatic discovery, and the final visual overlay are still in progress.
+An Android phone captures motion at approximately 60 Hz and streams it over the local network. A Rust-powered desktop application validates and processes the data, estimates roll and pitch, exposes live diagnostics, and manages an experimental transparent overlay.
 
-## What it demonstrates
+> [!IMPORTANT]
+> Anchor is a personal engineering and research prototype, not a medical product. It does not currently claim to prevent or treat motion sickness, and the visual stimulus has not yet been validated with users or in moving vehicles.
 
-- End-to-end communication between an Android client and a desktop application
-- A versioned JSON protocol shared across TypeScript and Rust
-- UDP ingestion at 60 Hz with validation, ordering, session handling, backpressure, and diagnostics
-- Offline motion-dataset recording, analysis, calibration, and deterministic filter evaluation
-- Automated comparison of gravity-only, low-pass, and complementary tilt estimators
-- A monorepo spanning mobile, desktop, shared packages, simulators, tests, and build tooling
+## Why this project exists
+
+Looking at a stationary screen while the vestibular system senses acceleration and turning can create conflicting signals. Anchor explores a simple hypothesis: a peripheral visual cue that follows real vehicle motion may provide a more coherent frame of reference without interrupting the user's work.
+
+The project is also an end-to-end systems challenge involving mobile sensors, native modules, real-time networking, signal processing, desktop window management, measurement, and fail-safe behavior.
+
+## Current status
+
+Anchor is an active prototype with its core motion pipeline working on real hardware.
+
+### Implemented and physically validated
+
+- Native Android capture of linear acceleration, gravity, and angular velocity
+- Versioned motion samples streamed at approximately 60 Hz over UDP
+- Rust receiver with size limits, rate limiting, validation, ordering, and session handling
+- Dataset recording, offline calibration, filter evaluation, and policy selection
+- Fail-closed live roll/pitch estimation integrated with the desktop diagnostics
+- Transport-integrity and latency-approximation measurement tools
+- A transparent, always-on-top, click-through experimental overlay on Windows
+- Standalone Android builds that run without Metro or `adb reverse`
+
+### Still in progress
+
+- Connecting processed motion to the visual overlay
+- Rendering interpolation, amplitude limits, smoothing, and safe return to neutral
+- Automatic desktop discovery, pairing, authentication, and encryption
+- Product-ready packaging and broader Windows/Linux validation
+- Vehicle studies and responsible evaluation of the original comfort hypothesis
 
 ## Architecture
 
 ```text
-Android sensors
-      |
-      | MotionSampleV1 / UDP
-      v
-Rust receiver (Tauri)
-      |
-      +--> live diagnostics
-      +--> dataset recorder
-      +--> calibration pipeline
-      +--> filter evaluation and selection
-      v
-React desktop UI
+Android phone                                           Desktop
+┌──────────────────────────────┐                       ┌───────────────────────────────┐
+│ Motion sensors               │                       │ Rust / Tauri                  │
+│ Kotlin aggregation (~60 Hz)  │  MotionSampleV1/UDP  │ Validate, order, rate-limit   │
+│ React Native controller      ├──────────────────────►│ Calibrate and estimate tilt   │
+│ Native UDP transport         │                       │ Measure and record datasets   │
+└──────────────────────────────┘                       └───────────────┬───────────────┘
+                                                                      │
+                                                       ┌──────────────▼───────────────┐
+                                                       │ React diagnostics            │
+                                                       │ Experimental Windows overlay │
+                                                       └──────────────────────────────┘
 ```
+
+Each UDP datagram contains one complete, independent JSON sample. The system favors fresh motion over guaranteed delivery: under backpressure, it keeps the newest sample instead of building a queue of stale data.
+
+## Engineering highlights
+
+- **Shared contract:** a JSON Schema and common fixtures keep TypeScript and Rust validation aligned.
+- **Native critical paths:** Android sensors and networking run in Kotlin; desktop ingestion and motion processing run in Rust.
+- **Observable behavior:** both applications expose lifecycle, throughput, rejection, backpressure, and stream-health metrics.
+- **Fail-closed processing:** invalid configuration, timing gaps, stale data, sequence errors, or estimator failures produce a neutral output.
+- **Reproducible evaluation:** synthetic fixtures and captured datasets support deterministic comparison of gravity-only, low-pass, and complementary estimators.
+- **Explicit measurement limits:** latency reports include clock-synchronization uncertainty and do not overstate sensor-to-screen performance.
 
 ## Technology
 
-- **Desktop:** Tauri, Rust, React, TypeScript, Vite
-- **Mobile:** React Native, Android, Kotlin/Gradle
-- **Protocol:** versioned JSON over UDP
-- **Tooling:** pnpm workspaces, Cargo, Node.js test runner
-- **Quality:** unit, integration, protocol, build, and dataset-fixture tests
+| Area | Stack |
+| --- | --- |
+| Desktop | Tauri 2, Rust, Tokio, React, TypeScript, Vite |
+| Mobile | React Native, TypeScript, Android, Kotlin, TurboModules |
+| Transport | Versioned JSON over UDP on a local network |
+| Data and filtering | Rust CLIs, NDJSON datasets, offline calibration and estimator evaluation |
+| Tooling | pnpm workspaces, Cargo, Gradle, Node.js test runner, Jest |
 
 ## Repository structure
 
 ```text
 apps/
-  desktop/              Tauri desktop app and Rust motion pipeline
-  mobile/               Android sensor capture and UDP sender
+  desktop/              Tauri application, Rust receiver, processing, and overlay
+  mobile/               React Native app and native Android sensor/UDP modules
 packages/
-  protocol/             Shared protocol contracts
-  motion-simulator/     Deterministic local stream simulator
-docs/                   Technical notes and decisions
-scripts/                Repeatable build and validation scripts
+  protocol/             Shared MotionSampleV1 contract, schema, and fixtures
+tools/
+  motion-simulator/     Deterministic local UDP stream simulator
+docs/                   Architecture, experiments, decisions, and measurement methods
+scripts/                Repeatable mobile build and verification tooling
 ```
 
 ## Run the local vertical slice
@@ -59,33 +96,32 @@ scripts/                Repeatable build and validation scripts
 
 - Node.js 20+
 - pnpm
-- Rust toolchain
-- Android SDK and JDK 21 for the mobile build
+- Rust toolchain and platform prerequisites for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
+- JDK 21 and the Android SDK only when building the mobile application
 
-Install dependencies:
+Install the workspace dependencies:
 
 ```bash
 pnpm install
 ```
 
-Start the desktop receiver:
+Start the desktop application:
 
 ```bash
 pnpm dev:desktop
 ```
 
-In a second terminal, start the simulator:
+In a second terminal, send a five-second deterministic motion stream:
 
 ```bash
 pnpm dev:simulator -- --duration 5 --pattern sine
 ```
 
-For the real Android-to-desktop flow, see:
-
-- [Desktop guide](apps/desktop/README.md)
-- [Mobile guide](apps/mobile/README.md)
+The simulator sends samples to `127.0.0.1:57421`. For the physical Android-to-desktop flow, see the [mobile guide](apps/mobile/README.md) and [desktop guide](apps/desktop/README.md).
 
 ## Verification
+
+The repository includes unit, integration, protocol-contract, native Android, Rust, lifecycle, and dataset-fixture coverage. The main workspace checks are:
 
 ```bash
 pnpm typecheck
@@ -94,21 +130,28 @@ pnpm protocol:test:rust
 pnpm test:desktop
 pnpm test:simulator
 pnpm test:receiver
-pnpm test:mobile:standalone-scripts
-pnpm verify:mobile:bundle
+pnpm --filter anchor-mobile test -- --runInBand
 ```
 
-## Security boundaries
+Android-native checks additionally require JDK 21 and the Android SDK. See the [project context](docs/PROJECT_CONTEXT.md#12-comandos-operacionais) for the complete build, measurement, and validation command set.
 
-The current prototype is designed for a trusted local network. UDP traffic is not authenticated or encrypted, and the receiver must not be exposed directly to the internet.
+## Design constraints and safety
 
-## Roadmap
+- The current UDP stream has no authentication or encryption. Use it only on a trusted local network and never expose port `57421` directly to the internet.
+- The Android phone currently requires a documented mounting orientation; calibration corrects roll and pitch, but yaw remains unavailable.
+- The overlay infrastructure is physically validated on Windows. Other windowing platforms remain unvalidated.
+- A delayed or incorrect visual response could be ineffective or increase discomfort. Human testing requires explicit safety criteria and stop conditions.
 
-- Apply the selected calibration and filter policy to the live stream
-- Add authenticated and encrypted transport
-- Add automatic desktop discovery on the LAN
-- Build the final visual overlay and interaction layer
+## Documentation
+
+- [Project context and current state](docs/PROJECT_CONTEXT.md)
+- [Live motion pipeline](docs/LIVE_MOTION_PIPELINE_V1.md)
+- [Calibration method](docs/MOTION_CALIBRATION_V1.md)
+- [Filter evaluation](docs/MOTION_FILTER_EVALUATION_V1.md)
+- [Transport measurement](docs/MOTION_TRANSPORT_MEASUREMENT_V1.md)
+- [Latency measurement](docs/MOTION_LATENCY_MEASUREMENT_V1.md)
+- [Motion protocol](packages/protocol/README.md)
 
 ## Author
 
-Built by [Thúlio Vicente](https://github.com/thuliovs) as an exploration of cross-platform systems, real-time data, and sensor-processing architecture.
+Built by [Thúlio Vicente](https://github.com/thuliovs) as a hands-on exploration of cross-platform systems, real-time data pipelines, sensor processing, and responsible product experimentation.

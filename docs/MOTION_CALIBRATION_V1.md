@@ -200,6 +200,12 @@ APIs principais:
 - `apply_calibration_to_angular`;
 - `apply_calibration_to_gravity`.
 
+## Uso preparado no fluxo vivo B4a
+
+A B4a adiciona `PreparedCalibrationV1` em `apps/desktop/src-tauri/src/live_motion/`. Ele é criado somente a partir de `CalibrationProfileV1` válido, canonicaliza uma vez, rejeita `yawCalibrated=true`, guarda biases/rotação e aplica linear, gravity e angular sem revalidar o perfil por vetor.
+
+O contrato `CalibrationProfileFingerprintV1` fica em `calibration::provenance`, compartilhado por B3b e B4a. O fingerprint do perfil preparado é calculado sobre o perfil validado serializado em JSON compacto determinístico, com prefixo `anchor:calibration-profile:v1\0` e SHA-256. Esse digest identifica consistência de conteúdo; não é autenticação nem assinatura.
+
 ## Interpretacao pratica
 
 - bias linear perto de zero: suporte estavel e dataset realmente parado;

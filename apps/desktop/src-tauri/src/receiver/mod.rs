@@ -97,6 +97,7 @@ pub struct ReceiverState {
     last_sequence: Option<u32>,
     last_valid_received_at: Option<Instant>,
     metrics: ReceiverMetrics,
+    measurement_window_baseline: Option<ReceiverMetrics>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +167,10 @@ impl ReceiverState {
         }
     }
 
+    pub fn measurement_window_baseline(&self) -> Option<ReceiverMetrics> {
+        self.measurement_window_baseline.clone()
+    }
+
     pub fn snapshot(&self, now: Instant) -> ReceiverSnapshot {
         ReceiverSnapshot {
             last_sample: self.last_sample.clone(),
@@ -205,6 +210,11 @@ impl ReceiverState {
         now: Instant,
         acceptance: SampleAcceptance,
     ) -> SampleAcceptance {
+        if self.measurement_window_baseline.is_none() {
+            let mut baseline = self.metrics.clone();
+            baseline.received_datagrams = baseline.received_datagrams.saturating_sub(1);
+            self.measurement_window_baseline = Some(baseline);
+        }
         self.active_sender = Some(sender);
         self.last_sequence = Some(sample.sequence);
         self.active_session_id = Some(sample.session_id.clone());
@@ -297,8 +307,9 @@ impl FixedWindowRateLimiter {
 mod tests {
     use super::{
         udp::{start_udp_receiver, UdpReceiverConfig},
-        FixedWindowRateLimiter, ReceiverMetrics, ReceiverState, ReceiverStatusDto,
-        SharedReceiverState, StreamStatus, MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
+        AcceptedSampleEvent, AcceptedSampleSink, FixedWindowRateLimiter, ReceiverMetrics,
+        ReceiverState, ReceiverStatusDto, SharedReceiverState, StreamStatus,
+        MAX_DATAGRAMS_PER_SECOND, SESSION_TIMEOUT, STALE_AFTER,
     };
     use crate::protocol::MotionSampleV1;
     use serde_json::json;
@@ -308,6 +319,15 @@ mod tests {
         time::{Duration, Instant},
     };
     use tokio::{net::UdpSocket, sync::watch};
+
+    #[derive(Default)]
+    struct CountingSink(Mutex<u64>);
+
+    impl AcceptedSampleSink for CountingSink {
+        fn try_publish(&self, _event: AcceptedSampleEvent) {
+            *self.0.lock().expect("sink lock") += 1;
+        }
+    }
 
     const VALID_FIXTURE: &str =
         include_str!("../../../../../packages/protocol/fixtures/valid/motion-sample.json");
@@ -486,6 +506,31 @@ mod tests {
         assert_eq!(snapshot.metrics.invalid_packets, 1);
         assert_eq!(snapshot.metrics.oversized_datagrams, 1);
         assert_eq!(snapshot.metrics.rate_limited_datagrams, 1);
+    }
+
+    #[test]
+    fn first_acceptance_captures_atomic_pre_datagram_measurement_baseline() {
+        let now = Instant::now();
+        let mut state = ReceiverState::default();
+        state.record_received_datagram();
+        state.record_invalid_packet();
+        state.record_received_datagram();
+        state.apply_sample(sample(0, "session-a"), sender(41000), now);
+        state.record_received_datagram();
+        state.apply_sample(
+            sample(1, "session-a"),
+            sender(41000),
+            now + Duration::from_millis(1),
+        );
+
+        let baseline = state.measurement_window_baseline().expect("baseline");
+        let end = state.snapshot(now + Duration::from_millis(1)).metrics;
+        assert_eq!(baseline.received_datagrams, 1);
+        assert_eq!(baseline.invalid_packets, 1);
+        assert_eq!(baseline.accepted_samples, 0);
+        assert_eq!(end.received_datagrams - baseline.received_datagrams, 2);
+        assert_eq!(end.accepted_samples - baseline.accepted_samples, 2);
+        assert_eq!(end.invalid_packets - baseline.invalid_packets, 0);
     }
 
     #[test]
@@ -724,6 +769,50 @@ mod tests {
             "ignored samples must not be published"
         );
 
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn udp_receiver_does_not_send_rejected_packets_to_sink() {
+        let shared_state: SharedReceiverState = Arc::new(Mutex::new(ReceiverState::default()));
+        let (sample_tx, _sample_rx) = watch::channel(None);
+        let sink = Arc::new(CountingSink::default());
+        let receiver = start_udp_receiver(
+            UdpReceiverConfig {
+                bind_addr: "127.0.0.1:0".parse().expect("bind addr"),
+                accepted_sample_sink: Some(sink.clone()),
+                ..UdpReceiverConfig::default()
+            },
+            shared_state,
+            sample_tx,
+        )
+        .await
+        .expect("receiver should start");
+
+        let sender_socket = UdpSocket::bind("127.0.0.1:0").await.expect("sender bind");
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send initial datagram");
+        sender_socket
+            .send_to(VALID_FIXTURE.as_bytes(), receiver.local_addr())
+            .await
+            .expect("send duplicate datagram");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if *sink.0.lock().expect("sink lock") == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sink did not receive accepted sample"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(*sink.0.lock().expect("sink lock"), 1);
         receiver.shutdown().await;
     }
 

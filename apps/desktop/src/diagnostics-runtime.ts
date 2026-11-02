@@ -1,6 +1,7 @@
 export interface DiagnosticErrorState {
   eventBridgeError: string | null;
   snapshotError: string | null;
+  tiltSnapshotError: string | null;
 }
 
 export interface SchedulerLike<Handle> {
@@ -19,6 +20,7 @@ export interface SequentialPollerOptions<Handle, Result> {
 export const EMPTY_DIAGNOSTIC_ERRORS: DiagnosticErrorState = {
   eventBridgeError: null,
   snapshotError: null,
+  tiltSnapshotError: null,
 };
 
 export function setEventBridgeError(
@@ -38,6 +40,16 @@ export function setSnapshotError(
   return {
     ...current,
     snapshotError,
+  };
+}
+
+export function setTiltSnapshotError(
+  current: DiagnosticErrorState,
+  tiltSnapshotError: string | null,
+): DiagnosticErrorState {
+  return {
+    ...current,
+    tiltSnapshotError,
   };
 }
 

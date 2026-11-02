@@ -1,7 +1,7 @@
 # Anchor — Contexto, Arquitetura e Estado do Projeto
 
-> **Snapshot de referência:** 2 de setembro de 2026
-> **Estado:** plataforma de diagnóstico validada em hardware real; variante Android standalone interna automatizada, construída, instalada e validada fisicamente sem Metro e sem `adb reverse`
+> **Snapshot de referência:** 23 de outubro de 2026
+> **Estado:** plataforma de diagnóstico, Fase B e C1 concluídas; overlay C1 fisicamente validado no Windows
 > **Objetivo deste documento:** ser a fonte de contexto para pessoas e agentes que continuarem o projeto sem depender do histórico de chats.
 
 ## 1. Resumo executivo
@@ -20,9 +20,9 @@ Neste momento, o pipeline técnico básico funciona de ponta a ponta em hardware
 3. cada amostra é serializada como JSON em um datagrama UDP;
 4. o desktop recebe, limita, valida e ordena os pacotes em Rust;
 5. o frontend Tauri exibe os dados e métricas em tempo real;
-6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch e executar uma seleção offline B3b, ainda sem aplicação ao fluxo ao vivo.
+6. o desktop já consegue gerar um perfil de calibração offline v1 a partir de dataset `stationary`, avaliar offline estimadores de roll/pitch, executar uma seleção offline B3b e ligar o núcleo Rust puro B4a ao receiver/Tauri/UI como diagnóstico B4b.
 
-O que existe hoje é uma plataforma de diagnóstico de movimento e transporte com calibração estática offline v1, harness determinístico B3a para comparar estimadores de tilt observável e camada B3b para seleção offline auditável. O horizonte artificial/overlay terapêutico ainda não foi implementado, e a eficácia contra cinetose ainda não foi estudada nem demonstrada.
+O que existe hoje inclui B5a e B5b opt-in, fisicamente validadas, para medir a integridade do transporte e aproximações de latência sensor → processamento B4b com sincronização NTP-like e incerteza explícita. B5b não mede sensor → tela e não define thresholds de desempenho. A Fase B está concluída. A infraestrutura C1 também foi concluída e fisicamente validada no Windows; o overlay continua estático e provisório, sem movimento real.
 
 ## 2. Problema e hipótese do produto
 
@@ -135,7 +135,7 @@ O JSON Schema em `packages/protocol/schema/motion-sample.v1.schema.json` é a es
 - Y positivo: frente do veículo;
 - Z positivo: cima.
 
-O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo. Esse referencial ainda não foi calibrado; ele é apenas a hipótese operacional atual de montagem. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 introduz datasets controlados para confirmar empiricamente os sinais reais dos eixos antes da futura operação de zero/calibração.
+O uso atual pressupõe o celular deitado, tela para cima, em retrato e com a borda superior apontando para a frente do veículo, documentado nas capturas regeneradas como `flat_screen_up_portrait_top_toward_vehicle_front`. Esse referencial é a hipótese operacional atual de montagem para o protocolo bruto. Parado nessa posição, `gravityMps2.z` deve ficar próximo de `-9.80665`. A fase B1 registrou datasets controlados que confirmaram empiricamente os sinais reais dos eixos sob essa convenção; a calibração B2 e o pipeline B4a/B4b permanecem camadas desktop sobre o protocolo v1 bruto.
 
 ### Regras de transporte
 
@@ -247,7 +247,7 @@ Nesta data, a implementação automatizada da variante standalone existe, o APK 
 - Rust/Tokio para rede e estado;
 - React/TypeScript para diagnóstico;
 - tray icon já existente;
-- desenvolvimento e teste físico atual realizados em Linux.
+- desenvolvimento e testes físicos realizados em Linux; a integração B4b também foi validada em Windows.
 
 ### Receptor UDP
 
@@ -285,11 +285,23 @@ Métricas:
 
 ### Ponte Tauri e diagnóstico
 
-O backend publica a última amostra aceita no evento `anchor-motion-sample-v1`. O frontend recebe esse evento para movimento ao vivo e consulta `get_receiver_snapshot` sequencialmente a cada 250 ms para estado e métricas.
+O backend publica a última amostra aceita no evento `anchor-motion-sample-v1`. O frontend recebe esse evento para movimento bruto ao vivo e consulta `get_receiver_snapshot` e `get_live_tilt_snapshot` sequencialmente a cada 250 ms para estado, métricas e diagnóstico de tilt processado.
 
 A visualização atual move um marcador diretamente com `linearAccelerationMps2.x/y`. Ela não integra posição, não estima orientação e não representa ainda o horizonte artificial final.
 
 O frontend de diagnóstico mostra `Receptor UDP (todas as interfaces IPv4, porta 57421)`, coerente com o bind real em `0.0.0.0:57421`.
+
+### Infraestrutura de overlay C1
+
+O desktop cria sob demanda uma segunda webview com label único `overlay`. No Windows ela é transparente, sem decoração, always-on-top, fora da barra de tarefas e dimensionada pela work area da tela principal. O backend Rust mantém a fonte de verdade de aberto/fechado, modo e último erro. Abrir entra sempre em configuração; operação ativa click-through. Fechar esconde e reutiliza a mesma janela, impedindo duplicatas.
+
+O tray oferece recuperação independente da webview: mostrar diagnóstico, retornar o overlay à configuração, fechar overlay e sair. Falha ao alternar input esconde a janela, em vez de deixá-la bloqueando o usuário. Plataformas fora de Windows ficam explicitamente indisponíveis e fail-closed até validação própria. O visual C1 é apenas uma moldura/mira estática identificada; não consome `targetTilt` e não implementa C2, interpolação ou suavização.
+
+A primeira validação física, em 23 de outubro de 2026, falhou: `WebviewWindowBuilder::build()` era chamado por um comando Tauri síncrono e bloqueou no Windows, sem resposta ao frontend. A correção torna `open_overlay` assíncrono e executa criação/configuração em `spawn_blocking`, fora da main event loop. O mutex de estado é usado somente para transições curtas `closed → opening → open/closed`; não fica retido durante APIs de janela. O backend invalida a tentativa após 8 segundos e o frontend aplica timeout de 10 segundos, sempre libera o pending local e mostra erro de recuperação. Gerações impedem abertura concorrente e permitem que fechar ou timeout cancelem logicamente uma criação tardia.
+
+Testes automatizados validam a máquina de estados, cancelamento de geração, prevenção de abertura concorrente e timeout do frontend. Eles não criam uma WebView2 real e, portanto, não comprovam transparência, always-on-top, click-through ou ausência de deadlock no Windows. Essas propriedades foram comprovadas pela revalidação física aprovada em 23 de outubro de 2026.
+
+Na revalidação, a janela principal continuou funcionando, `opening` retornou normalmente, a segunda janela apareceu sem timeout e transparência, ausência de decoração, always-on-top e work area foram confirmados. A moldura/mira provisória apareceu, configuração recebeu mouse e operação permitiu interação com outros aplicativos por click-through. O tray recuperou configuração e fechou o overlay; três ciclos abrir/fechar não criaram duplicatas e sempre reabriram em configuração. Fechar preservou o diagnóstico e `Sair` encerrou o processo sem janelas remanescentes. Com isso, C1 foi concluída. Linux e macOS continuam sem validação.
 
 ### Calibração offline v1
 
@@ -327,7 +339,33 @@ Limitações deliberadas:
 - não infere direção por movimento;
 - produz um `leveled mounting frame`, não um referencial completo do veículo;
 - não distingue inclinação do suporte, do veículo e do piso/estrada no instante do zero;
-- ainda não aplica o perfil ao receptor ao vivo nem à UI.
+- a aplicação viva do perfil é feita somente pelo runtime B4b configurado explicitamente; ela não altera o protocolo nem transforma o perfil em referencial completo do veículo.
+
+### Núcleo seguro de tilt vivo B4a
+
+O desktop possui `apps/desktop/src-tauri/src/live_motion/`, um núcleo Rust puro e determinístico que prepara um perfil B2 validado, verifica uma política B3b V2 vinculada por fingerprint, instancia um dos três estimadores existentes e produz `LiveTiltSnapshotV1` a partir de `AcceptedSampleEvent`.
+
+Características:
+
+- sem I/O, socket, Tauri, threads, tasks ou consulta interna a relógio real;
+- `snapshot(now: Instant)` recebe relógio monotônico injetado;
+- política V1 permanece histórica e não ativa o núcleo vivo;
+- mismatch de fingerprint gera `unavailable` com alvo neutro;
+- a API pública ativa passa por `LiveMotionPipeline`, sem construtor público que permita contornar a proveniência;
+- erro invalidante reconstrói o estimador e exige novo warm-up antes de voltar a `valid`;
+- `lastSampleAgeMs` é opcional e fica ausente quando nenhuma amostra foi recebida;
+- `LiveMotionPipeline` é `Send` para compatibilidade futura com estado compartilhado;
+- `yawAvailable=false` sempre;
+- somente estado `valid` entrega `targetTilt` diferente de zero;
+- limites iniciais: gap contínuo máximo de `100 ms`, warm-up de duas amostras, stale acima de `250 ms`, disconnected acima de `1 s`.
+
+Os limites de `100 ms` e duas amostras são políticas iniciais de engenharia, não limites clínicos. As métricas temporais online medem intervalos de origem, interarrival de recepção e variação relativa; não são latência ponta a ponta.
+
+### Integração diagnóstica de tilt vivo B4b
+
+B4b adiciona uma camada runtime separada em `live_motion::runtime`: carrega explicitamente `ANCHOR_CALIBRATION_PROFILE_PATH` e `ANCHOR_TILT_POLICY_PATH`, cria o `LiveMotionPipeline`, recebe somente `AcceptedSampleEvent` publicados pelo receiver, usa fila bounded com `try_send` e processa eventos em um worker dedicado. Configuração ausente ou inválida deixa o pipeline `unavailable` e `targetTilt` neutro, sem impedir o receiver UDP de iniciar.
+
+O comando Tauri `get_live_tilt_snapshot` é somente leitura e retorna o snapshot atual, incluindo métricas de integração como descartes de ingresso. A UI mostra a seção diagnóstica “Tilt processado” com estado, motivo de neutralização, roll/pitch utilizáveis, idade da última amostra, fingerprint curto e descartes. Fora de `valid`, roll/pitch utilizáveis são neutros. Na fatia B4b, overlay, janela transparente, click-through e medição formal de latência ponta a ponta permaneciam fora de escopo; C1 adicionou depois apenas a infraestrutura de janela, sem conectar `targetTilt`.
 
 ### Avaliacao offline de filtros B3a
 
@@ -369,11 +407,11 @@ Caracteristicas da B3b:
 - aplica gates estruturais, identifica configuracoes dominadas e calcula fronteira de Pareto com tolerancias fisicas declaradas;
 - preserva metricas de evento como `available`, `failed` ou `unavailable`, sem converter indisponibilidade aplicavel em zero;
 - usa as capturas fisicas apenas como proxies comportamentais, com `stationary` participando somente como proxy tardio de repouso;
-- emite JSON `selectionReportVersion = 1` e relatorio humano deterministico;
-- define o contrato Rust `TiltEstimatorPolicyV1`, validado, com `yawAvailable=false` e `source=b3b_offline_selection`;
-- nao aplica a politica ao receptor ao vivo.
+- emite novos JSONs `selectionReportVersion = 2` e relatorio humano deterministico com fingerprint do perfil;
+- preserva `TiltEstimatorPolicyV1` como historico e define `TiltEstimatorPolicyV2`, validado, com `yawAvailable=false`, `source=b3b_offline_selection` e `calibrationProfileFingerprint`;
+- produz a política que B4b consome somente quando perfil e fingerprint compatíveis são configurados explicitamente.
 
-Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Na execucao real B3b recalculada com as nove capturas e o perfil B2 selecionado, a politica recomendada foi `gravity_no_additional_anchor_filter` com parametros vazios, `yawAvailable = false` e `source = b3b_offline_selection`. A recomendacao anterior `complementary_tau_ms_400` nao e preservada por compatibilidade.
+Se os artifacts fisicos ignorados pelo Git nao estiverem presentes, a CLI falha com erro controlado. Em 1 de outubro de 2026, a seleção física B3b V2 foi executada localmente com as nove capturas B1 regeneradas e o perfil B2 aprovado. Ela escolheu `gravity_no_additional_anchor_filter`, sem parâmetros adicionais, com `yawAvailable = false` e fingerprint `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
 
 ## 9. Simulador de movimento
 
@@ -403,8 +441,8 @@ Em 25 de agosto de 2026, a primeira fatia vertical foi validada com um celular A
 
 ### Evidência observada
 
-- destino configurado no mobile: `192.168.1.209:57421`;
-- remetente visto pelo desktop: `192.168.1.225:54996`;
+- destino configurado manualmente no mobile para o receptor local;
+- remetente observado pelo desktop na mesma rede local;
 - status mobile: ativo;
 - status desktop: ativo;
 - sensores linear, gravity e gyro: disponíveis;
@@ -495,6 +533,55 @@ Os sinais opostos posteriores nas capturas de yaw e deslocamento correspondem à
 
 Essa validação sustenta a hipótese operacional atual dos eixos sob a convenção de montagem assumida, mas não constitui um referencial calibrado. Calibração/zero, filtros, fusão, correção de movimento e overlay continuam fora da B1.
 
+### Atualização física B1/B2/B3b — 1 de outubro de 2026
+
+Os nove cenários físicos B1 foram regenerados localmente com o mesmo celular e a convenção de montagem `flat_screen_up_portrait_top_toward_vehicle_front`. As capturas selecionadas ficaram próximas de `60 Hz`, tiveram uma única sessão por captura e não registraram descartes do gravador.
+
+O perfil estacionário B2 correspondente passou no gate de qualidade sem violações. Com esse perfil, a seleção física B3b V2 foi executada sobre os nove cenários e escolheu `gravity_no_additional_anchor_filter`, sem parâmetros adicionais, com `yawAvailable = false` e fingerprint do perfil B2 `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
+
+Esses resultados físicos continuam sendo evidência operacional e métricas proxy comportamentais; não estabelecem acurácia angular real.
+
+### Validação física da integração B4b — 20 de outubro de 2026
+
+A integração B4b foi validada fisicamente em Windows com o APK Android standalone e o desktop Tauri. Sem configuração de perfil e política, o receiver permaneceu ativo, enquanto o tilt ficou `unavailable` com `missing_configuration` e saída utilizável neutra, confirmando o comportamento fail-closed.
+
+Com perfil B2 e política V2 compatíveis, o pipeline chegou a `valid`, com neutralização `none`, fingerprint correto e zero descartes de ingresso. Roll respondeu de forma estável nos dois sentidos, aproximadamente `+1` e `-1 rad`. Pitch também foi validado nos dois sentidos: borda superior inclinada para baixo produziu pitch positivo, borda superior inclinada para cima produziu pitch negativo, e o estado permaneceu válido.
+
+Ao interromper a transmissão, o estado passou para `disconnected` em aproximadamente `1 s`; `targetTilt` e os valores utilizáveis de roll/pitch voltaram a zero, enquanto a última estimativa ficou somente como diagnóstico. Ao reiniciar, uma nova sessão foi aceita, o pipeline recuperou para `valid`, a neutralização voltou a `none` e roll/pitch retomaram resposta.
+
+Na observação final, o receiver registrou `22856` datagramas recebidos e `22856` amostras aceitas, com zero oversized, inválidos, duplicados/fora de ordem, sessão estrangeira, rate limited e descartes de ingresso. Foram observadas idades locais de amostra de poucos milissegundos; isso não é medição de latência ponta a ponta.
+
+### Validação física B5a — 21 de outubro de 2026
+
+A medição B5a foi executada em Windows com Android standalone, Wi-Fi/LAN local e receiver headless Rust. A janela solicitada foi de `60.000.000 us`; a duração observada entre a primeira e a última amostra foi `59.995.648 us`. O dataset aprovado contém `3.601` amostras, sequências `0..3600`, uma sessão, zero transições, zero gaps, zero amostras ausentes estimadas e perda por sequência de `0%`.
+
+A taxa média de origem foi `59,9964742072 Hz` e a taxa média recebida foi `60,0043523157 Hz`, com diferença absoluta de `0,0078781085 Hz` e diferença relativa de aproximadamente `0,01313%`. Todos os 14 gates de integridade foram aprovados. No período armado houve zero datagramas e zero rejeições. Durante a janela, o receiver recebeu `3.601` datagramas e aceitou `3.601` amostras, sem oversized, inválidos, duplicados/fora de ordem, sessão estrangeira ou rate limited. O recorder recebeu `3.601` eventos aceitos, escreveu `3.601` amostras, não descartou amostras e concluiu de forma limpa. As métricas do runtime B4b ficaram `not_applicable`, com motivo `headless_measurement_does_not_traverse_live_tilt_runtime`, porque a medição headless não atravessa esse runtime.
+
+A primeira baseline exploratória formal, calculada sobre `3.600` intervalos, foi:
+
+| Distribuição | Média | Desvio-padrão populacional | Mínimo | p50 | p95 | p99 | Máximo |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Intervalo de origem | `16.667,646 us` | `4.657,093 us` | `9.947 us` | `19.895 us` | `19.896 us` | `19.896 us` | `19.896 us` |
+| Interarrival de recepção | `16.665,458 us` | `8.547,669 us` | `44 us` | `19.143 us` | `31.715,65 us` | `38.971,63 us` | `44.609 us` |
+| Variação relativa assinada de atraso | `-2,188 us` | `7.143,793 us` | `-19.851 us` | `333,5 us` | `14.548,2 us` | `19.878,16 us` | `26.331 us` |
+| Variação absoluta relativa de atraso / proxy de jitter | `4.462,188 us` | `5.578,768 us` | `0 us` | `1.745,5 us` | `17.969,45 us` | `19.878,16 us` | `26.331 us` |
+
+Descritivamente, o interarrival (`p95` `31,716 ms`; `p99` `38,972 ms`) e a variação relativa assinada de atraso (`p95` `14,548 ms`; `p99` `19,878 ms`) ficaram coerentes ou ligeiramente abaixo do contexto histórico saudável de, respectivamente, `33–34/41 ms` e `14–16/24 ms`. Essa comparação é apenas contexto: não define thresholds, não aprova nem reprova desempenho e não sustenta alegação clínica.
+
+B5a não mediu latência de rede, latência ponta a ponta nem resposta sensor → tela. A variação absoluta relativa de atraso é somente um proxy de jitter, não jitter absoluto. A medição física aprova a integridade da execução e estabelece uma baseline exploratória; não comprova desempenho terapêutico.
+
+Antes da execução aprovada, uma tentativa sem stream foi interrompida com Ctrl+C antes da primeira amostra. O receiver e o recorder foram encerrados, o dataset vazio foi removido, nenhum relatório foi produzido e o código operacional foi `1`. Foi confirmada a ausência de `artifacts/motion-datasets/20261021T151800Z-stationary.ndjson` e `artifacts/motion-measurements/20261021T151800Z-stationary-b5a-v1.json`. Isso é evidência adicional do lifecycle operacional seguro, não uma medição física B5a aprovada.
+
+### Validação física B5b — 22 de outubro de 2026
+
+B5b foi executada em Windows com Android standalone, Wi-Fi/LAN local e receiver headless Rust, usando o pipeline B4b configurado. O relatório aprovado é `artifacts/motion-latency-measurements/20261022T124629Z-b5b-v1.json`, derivado de `artifacts/motion-latency-datasets/20261022T124629Z-b5b-v1.ndjson`; ambos permanecem locais e ignorados pelo Git. A janela solicitada de `60.000.000 us` observou `60.003.054 us`, com `3.601` amostras aceitas e processadas. Todos os 26 gates passaram.
+
+Foram reconstruídos `3.736` datagramas e `122/122` probes enviados/respondidos, sem perda ou rejeição de probe, pacote inválido, oversized, estrangeiro, duplicado/fora de ordem, sessão estrangeira, rate limiting ou drops de runtime, publicação e recorder. Doze amostras posteriores à janela nominal foram preservadas como fatos auditáveis `sample_after_window` e conciliadas no summary. O relatório preservou o perfil, a política V2 completa, o candidato `gravity_no_additional_anchor_filter` e o fingerprint B4b `43e9378ae7290c57bd4dbc6b8a2259a3126a4f0159077e268fa0ec2fa07d5797`.
+
+As medianas exploratórias foram `4.423,5 us` para RTT, `5.133 us` de sensor Android até preparação de envio, `159 us` do ingresso desktop até o tilt processado e `8.496,018 us` para a estimativa sensor → tilt processado. Os respectivos p95 foram `21.490,65 us`, `20.576 us`, `194 us` e `30.183,800 us`. A incerteza de sincronização teve p95 `10.745,325 us`. Esses números não são thresholds nem medem sensor → tela, renderização, resposta visual completa ou efeito clínico.
+
+A primeira execução física, `20261022T124239Z`, reprovou somente a consistência do summary e revelou que amostras posteriores à janela eram contadas pelo receiver sem fato correspondente no dataset. A CLI e o loader foram corrigidos para tornar essas chegadas explícitas e reconstruíveis; a segunda execução aprovou a correção. Os hashes SHA-256 dos artefatos aprovados são `65F1F0F0858E44B965963B32576F11BF78AB72985E3F31F9D6E1998F98BB7353` para o dataset e `0302FD8930ADABC5B69CADE46617455AFB43526B199FB250D41765B3B7894B34` para o relatório.
+
 ## 11. Marcos já concluídos
 
 | Commit | Marco |
@@ -506,6 +593,9 @@ Essa validação sustenta a hipótese operacional atual dos eixos sob a convenç
 | `937b91ea` | pipeline nativo de sensores Android |
 | `99c142d0` | streaming Android → desktop por UDP |
 | `039e1ddc` | bundle Metro compatível com monorepo pnpm |
+| `e6a8ed8b` | núcleo de tilt vivo fail-closed B4a |
+| `d7bb1c92` | integração diagnóstica B4b ao receiver, Tauri e UI |
+| `97234fdd` | inicialização confiável do runtime de tilt vivo |
 
 ## 12. Comandos operacionais
 
@@ -555,6 +645,7 @@ pnpm motion:calibrate -- artifacts/motion-datasets/<stationary>.ndjson --output 
 pnpm motion:evaluate -- --synthetic --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000
 pnpm motion:evaluate -- --dataset artifacts/motion-datasets/<dataset>.ndjson --profile artifacts/motion-calibrations/<profile>.json --low-pass-tau-ms 50,100,200,400 --complementary-tau-ms 100,250,500,1000 --json
 pnpm motion:select -- --profile artifacts/motion-calibrations/20260902t221420z-stationary-calibration-v1.json --dataset stationary=artifacts/motion-datasets/20260902T221420Z-stationary.ndjson --dataset roll_right=artifacts/motion-datasets/20260902T221919Z-roll_right.ndjson --dataset roll_left=artifacts/motion-datasets/20260902T221937Z-roll_left.ndjson --dataset pitch_front_down=artifacts/motion-datasets/20260902T222109Z-pitch_front_down.ndjson --dataset pitch_front_up=artifacts/motion-datasets/20260902T222126Z-pitch_front_up.ndjson --dataset yaw_clockwise=artifacts/motion-datasets/20260902T222326Z-yaw_clockwise.ndjson --dataset yaw_counterclockwise=artifacts/motion-datasets/20260902T222358Z-yaw_counterclockwise.ndjson --dataset linear_forward=artifacts/motion-datasets/20260902T222523Z-linear_forward.ndjson --dataset linear_backward=artifacts/motion-datasets/20260902T222735Z-linear_backward.ndjson --json
+pnpm motion:measure -- --duration-seconds 60
 ```
 
 Validações principais:
@@ -590,13 +681,10 @@ cd apps/mobile/android
 
 ## 13. O que ainda não existe
 
-- horizonte artificial/overlay final;
-- janela transparente, always-on-top e click-through;
-- modelo de movimento, orientação ou fusão de sensores destinado ao visual ao vivo;
-- aplicação da calibração ao fluxo ao vivo;
+- horizonte artificial/overlay final e movimento C2 conectado ao modelo de tilt;
 - compensação de drift e jitter;
 - interpolação para renderização independente da taxa da rede;
-- medição formal de latência ponta a ponta e jitter;
+- medição formal sensor → tela, latência ponta a ponta e jitter absoluto;
 - descoberta automática do desktop;
 - pareamento, autenticação ou criptografia;
 - ACK ou canal de controle;
@@ -604,7 +692,7 @@ cd apps/mobile/android
 - reconexão automática;
 - transporte USB de dados do produto;
 - app iOS;
-- empacotamento e validação Windows;
+- empacotamento Windows e validação nas demais plataformas de janela;
 - autostart, configuração completa do tray e gestão de firewall;
 - estudos em veículo e validação de eficácia contra cinetose.
 
@@ -620,7 +708,7 @@ Uma visualização atrasada, instável ou com movimento errado pode ser inútil 
 
 ### Referencial e montagem
 
-O referencial atual depende de uma orientação física obrigatória. A fatia B2 implementou e validou fisicamente uma operação offline de calibração/zero que produz um `leveled mounting frame` corrigindo roll e pitch, mas yaw continua indeterminado. Na prática, veículos, suportes e usuários variarão; a aplicação desse perfil ao fluxo ao vivo e futuras estratégias de montagem permanecem trabalhos separados.
+O referencial atual depende de uma orientação física obrigatória. A fatia B2 implementou e validou fisicamente uma operação offline de calibração/zero que produz um `leveled mounting frame` corrigindo roll e pitch, mas yaw continua indeterminado. B4b aplica esse perfil no diagnóstico vivo quando a política V2 compatível é configurada; veículos, suportes, usuários e futuras estratégias de montagem continuam sendo trabalhos separados.
 
 ### Modelo visual
 
@@ -636,7 +724,7 @@ O stream deliberadamente não confirma entrega. Um futuro canal de controle pode
 
 ### Portabilidade
 
-O objetivo inclui Windows e Linux, mas a validação física atual cobre Android + Linux. Transparência e click-through variam entre Windows, X11 e Wayland e precisam de protótipos por plataforma.
+O objetivo inclui Windows e Linux. A validação física cobre Android + Linux no fluxo anterior, Android standalone + Windows na integração B4b e transparência/click-through C1 no Windows. X11 e Wayland continuam sem validação e precisam de protótipos próprios.
 
 ## 15. Próximas fases recomendadas
 
@@ -652,19 +740,19 @@ Concluída em 2 de setembro de 2026.
 ### Fase B — Dados e modelo de movimento
 
 1. Concluído na fatia B1: registrar datasets controlados e verificar/documentar eixos e sinais nas capturas selecionadas.
-2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`; a aplicação desse perfil ao fluxo ao vivo permanece trabalho futuro separado.
+2. Concluído na fatia B2: implementar e validar fisicamente uma operação offline de calibração/zero para gerar perfil versionado de `leveled mounting frame`.
 3. Concluído na fatia B3a: criar harness determinístico offline para comparar baseline de gravidade, passa-baixa vetorial e complementar em roll/pitch, com fixtures sinteticas, proxies fisicos, CLI e JSON v1.
-4. Concluido na fatia B3b: implementar selecao offline, Pareto, contrato de politica e documentacao para definir candidato/parametros quando as nove capturas fisicas estiverem disponiveis localmente. A aplicacao ao receptor ao vivo permanece fora de escopo.
-5. Definir como o sistema reage a pacote perdido, jitter, stale e disconnect.
-6. Medir taxa, interarrival, jitter e uma aproximação defensável de latência ponta a ponta.
+4. Concluído na fatia B3b: executar seleção offline V2 com as nove capturas físicas regeneradas e produzir política vinculada ao perfil B2.
+5. Concluído nas fatias B4a e B4b: definir o processamento vivo fail-closed, integrá-lo ao receiver/desktop e validá-lo fisicamente.
+6. B5a e B5b concluídas e validadas fisicamente. B5b usa caminho separado com protocolo auxiliar, sincronização, incerteza explícita e processamento B4b configurado.
 
-As fatias B1, B2, B3a e B3b estão concluídas em código e documentação. A Fase B inteira ainda permanece em aberto por causa dos trabalhos futuros de aplicação ao vivo, reação a perda/jitter/stale/disconnect e medição de taxa/interarrival/jitter/latência.
+As fatias B1–B5b estão implementadas e validadas. A cobertura automatizada B5b inclui lifecycle, filas bounded, falhas de workers, loader estrito, contrato B4b preservado e gates compartilhados com B5a. B4b, B5a e B5b foram validadas fisicamente. A Fase B está concluída. C1 também foi concluída após a correção assíncrona e a revalidação física aprovada no Windows em 23 de outubro de 2026.
 
 ### Fase C — Primeiro overlay experimental
 
-1. Criar uma janela transparente e always-on-top.
-2. Implementar click-through com modo explícito de configuração.
-3. Renderizar um estímulo mínimo baseado no modelo definido na fase anterior.
+1. Concluído e validado fisicamente na C1: janela transparente, sem decoração, always-on-top e ajustada à work area no Windows.
+2. Concluído e validado fisicamente na C1: click-through, configuração explícita, recuperação pelo tray, janela única e lifecycle seguro.
+3. C2 ainda não iniciada: renderizar um estímulo mínimo baseado no modelo definido na fase anterior.
 4. Separar taxa de renderização da taxa do sensor e interpolar quando necessário.
 5. Adicionar limites de amplitude, suavização e retorno seguro ao neutro.
 

@@ -41,7 +41,7 @@ pub struct AngleEstimate {
     pub yaw_available: bool,
 }
 
-pub trait Estimator {
+pub trait Estimator: Send {
     fn initialize(
         &mut self,
         sample: &CalibratedMotionSample,

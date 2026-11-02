@@ -12,6 +12,7 @@ class NativeUdpSenderModule(
   reactContext: ReactApplicationContext,
 ) : NativeUdpSenderSpec(reactContext), LifecycleEventListener {
   private val controller = NativeUdpSenderController()
+  private val latencyController = LatencyUdpController()
 
   init {
     reactApplicationContext.addLifecycleEventListener(this)
@@ -41,20 +42,39 @@ class NativeUdpSenderModule(
     controller.close()
   }
 
+  @ReactMethod
+  override fun openLatency(host: String, port: Double, measurementId: String, promise: Promise) {
+    val normalized = try { NativeUdpSenderPortNormalizer.normalize(port) } catch (error: IllegalArgumentException) {
+      promise.reject(NativeUdpSenderController.ERR_INVALID_DESTINATION, error.message); return
+    }
+    latencyController.open(host, normalized, measurementId, PromiseAdapter(promise))
+  }
+
+  @ReactMethod
+  override fun sendLatency(samplePayload: String, sensorEventTimestampUs: Double, promise: Promise) {
+    latencyController.sendSample(samplePayload, sensorEventTimestampUs.toLong(), PromiseAdapter(promise))
+  }
+
+  @ReactMethod
+  override fun closeLatency() { latencyController.close() }
+
   override fun onHostResume() {
     controller.onHostResume()
   }
 
   override fun onHostPause() {
     controller.onHostPause()
+    latencyController.close()
   }
 
   override fun onHostDestroy() {
     controller.onHostDestroy()
+    latencyController.close()
   }
 
   override fun invalidate() {
     controller.invalidate()
+    latencyController.close()
     reactApplicationContext.removeLifecycleEventListener(this)
     super.invalidate()
   }

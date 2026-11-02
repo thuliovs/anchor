@@ -13,6 +13,8 @@ Captura sensores Android reais, converte frames nativos em `MotionSampleV1`, ser
 - sem persistencia de IP/porta;
 - sem ACK, autenticacao ou criptografia.
 
+O modo diagnóstico B5b é opt-in e abre um socket UDP bidirecional exclusivo. Ele preserva o timestamp monotônico absoluto do evento de sensor, responde probes NTP-like e envia `latency_sample_v1`; o modo padrão continua sendo o stream `MotionSampleV1` v1 inalterado. Resultados são aproximações com incerteza, não sensor → tela. Consulte `docs/MOTION_LATENCY_MEASUREMENT_V1.md`. B5b foi validada fisicamente em 22 de outubro de 2026, com os 26 gates aprovados, `3.601` amostras aceitas/processadas, `122/122` probes respondidos e zero drops.
+
 ## Variantes Android
 
 - `debug`: fluxo atual de desenvolvimento com Metro, Fast Refresh e suporte de developer preservados; pode usar `adb reverse tcp:8081 tcp:8081`.

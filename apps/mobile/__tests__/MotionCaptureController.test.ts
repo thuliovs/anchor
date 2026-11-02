@@ -95,6 +95,9 @@ class FakeUdpModule implements UdpSenderModule {
   public pendingOpenDeferreds: Array<Deferred<void>> = [];
   public pendingSends: Array<Deferred<void>> = [];
   public isClosed = true;
+  public latencySendMode: 'immediate' | 'deferred' = 'immediate';
+  public latencySendError: Error | null = null;
+  public readonly latencySends: Array<Deferred<void>> = [];
 
   async open(host: string, port: number): Promise<void> {
     this.openCalls.push({ host, port });
@@ -133,6 +136,17 @@ class FakeUdpModule implements UdpSenderModule {
     this.closeCallCount += 1;
     this.isClosed = true;
   }
+
+  async openLatency(): Promise<void> { this.isClosed = false; }
+  async sendLatency(): Promise<void> {
+    if (this.latencySendError) throw this.latencySendError;
+    if (this.latencySendMode === 'deferred') {
+      const deferred = createDeferred<void>();
+      this.latencySends.push(deferred);
+      return deferred.promise;
+    }
+  }
+  closeLatency(): void { this.isClosed = true; }
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -672,5 +686,36 @@ describe('MotionCaptureController', () => {
 
     expect(module.startCalls).toEqual([60]);
     expect(controller.getSnapshot().status).toBe('starting');
+  });
+
+  it('B5b contabiliza substituicoes latest-wins e nao envia uma geracao fechada', async () => {
+    const module = new FakeMotionModule();
+    const udpModule = new FakeUdpModule();
+    udpModule.latencySendMode = 'deferred';
+    const controller = new MotionCaptureController({nativeModule: module, udpModule, appState: new FakeAppState()});
+    await controller.initialize();
+    await controller.startCapture({host: '192.168.0.20', port: 57421}, true);
+    module.emit(buildFrame({sequence: 0, sensorEventTimestampUs: 10}));
+    module.emit(buildFrame({sequence: 1, sensorEventTimestampUs: 20}));
+    module.emit(buildFrame({sequence: 2, sensorEventTimestampUs: 30}));
+    expect(controller.getSnapshot().latencyTransportMetrics).toMatchObject({offeredSamples: 3, droppedBackpressure: 1, sentSamples: 0});
+    controller.stopCapture();
+    udpModule.latencySends[0].resolve();
+    await flushMicrotasks();
+    expect(udpModule.latencySends).toHaveLength(1);
+    expect(controller.getSnapshot().latencyTransportMetrics.sentSamples).toBe(0);
+  });
+
+  it('B5b contabiliza erro de envio', async () => {
+    const module = new FakeMotionModule();
+    const udpModule = new FakeUdpModule();
+    udpModule.latencySendError = new Error('send failed');
+    const controller = new MotionCaptureController({nativeModule: module, udpModule, appState: new FakeAppState()});
+    await controller.initialize();
+    await controller.startCapture({host: '192.168.0.20', port: 57421}, true);
+    module.emit(buildFrame({sensorEventTimestampUs: 10}));
+    await flushMicrotasks();
+    expect(controller.getSnapshot().latencyTransportMetrics.sendErrors).toBe(1);
+    expect(controller.getSnapshot().status).toBe('error');
   });
 });

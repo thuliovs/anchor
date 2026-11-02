@@ -45,6 +45,13 @@ function makeSnapshot(
       sendErrors: 0,
       lastTransportError: null,
     },
+    latencyTransportMetrics: {
+      offeredSamples: 0,
+      sentSamples: 0,
+      droppedBackpressure: 0,
+      rejectedSamples: 0,
+      sendErrors: 0,
+    },
     ...overrides,
   };
 }

@@ -149,12 +149,14 @@ pub struct DatasetAnalysis {
     pub is_complete: bool,
     pub sample_count: usize,
     pub session_count: usize,
+    pub session_transition_count: usize,
     pub observed_duration_us: u64,
     pub source_average_rate_hz: f64,
     pub receive_average_rate_hz: f64,
     pub source_interval_us: IntervalStats,
     pub receive_interval_us: IntervalStats,
     pub relative_delay_variation_us: SignedIntervalStats,
+    pub absolute_relative_delay_variation_us: IntervalStats,
     pub recorder_dropped_samples: u64,
     pub sessions: Vec<SessionAnalysis>,
     pub vectors: VectorFieldStats,
@@ -185,8 +187,10 @@ pub struct SequenceGap {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntervalStats {
+    pub count: usize,
     pub min: Option<u64>,
     pub mean: Option<f64>,
+    pub population_stddev: Option<f64>,
     pub p50: Option<f64>,
     pub p95: Option<f64>,
     pub p99: Option<f64>,
@@ -196,8 +200,10 @@ pub struct IntervalStats {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedIntervalStats {
+    pub count: usize,
     pub min: Option<i64>,
     pub mean: Option<f64>,
+    pub population_stddev: Option<f64>,
     pub p50: Option<f64>,
     pub p95: Option<f64>,
     pub p99: Option<f64>,
@@ -947,10 +953,15 @@ fn build_analysis(
     samples: Vec<DatasetSampleRecord>,
     summary: Option<DatasetSummaryRecord>,
 ) -> Result<DatasetAnalysis, DatasetAnalysisError> {
+    let session_transition_count = samples
+        .windows(2)
+        .filter(|pair| pair[0].sample.session_id != pair[1].sample.session_id)
+        .count();
     let mut session_summaries: Vec<SessionAccumulator> = Vec::new();
     let mut source_intervals = Vec::new();
     let mut receive_intervals = Vec::new();
     let mut relative_variations = Vec::new();
+    let mut absolute_relative_variations = Vec::new();
 
     let mut linear_x = Vec::new();
     let mut linear_y = Vec::new();
@@ -1035,6 +1046,7 @@ fn build_analysis(
             source_intervals.push(source_delta);
             receive_intervals.push(receive_delta);
             relative_variations.push(relative_variation);
+            absolute_relative_variations.push(relative_variation.unsigned_abs());
         }
     }
 
@@ -1071,12 +1083,14 @@ fn build_analysis(
         is_complete: summary.as_ref().map(|item| item.completed).unwrap_or(false),
         sample_count: samples.len(),
         session_count: sessions.len(),
+        session_transition_count,
         observed_duration_us,
         source_average_rate_hz: average_rate_hz(&source_intervals),
         receive_average_rate_hz: average_rate_hz(&receive_intervals),
         source_interval_us: summarize_u64(&source_intervals),
         receive_interval_us: summarize_u64(&receive_intervals),
         relative_delay_variation_us: summarize_i64(&relative_variations),
+        absolute_relative_delay_variation_us: summarize_u64(&absolute_relative_variations),
         recorder_dropped_samples: summary
             .as_ref()
             .map(|item| item.recorder_dropped_samples)
@@ -1107,8 +1121,10 @@ fn build_analysis(
 fn summarize_u64(values: &[u64]) -> IntervalStats {
     if values.is_empty() {
         return IntervalStats {
+            count: 0,
             min: None,
             mean: None,
+            population_stddev: None,
             p50: None,
             p95: None,
             p99: None,
@@ -1119,8 +1135,10 @@ fn summarize_u64(values: &[u64]) -> IntervalStats {
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     IntervalStats {
+        count: values.len(),
         min: sorted.first().copied(),
         mean: Some(mean_u64(values)),
+        population_stddev: Some(population_stddev_u64(values)),
         p50: Some(percentile_r7_u64(&sorted, 0.50)),
         p95: Some(percentile_r7_u64(&sorted, 0.95)),
         p99: Some(percentile_r7_u64(&sorted, 0.99)),
@@ -1131,8 +1149,10 @@ fn summarize_u64(values: &[u64]) -> IntervalStats {
 fn summarize_i64(values: &[i64]) -> SignedIntervalStats {
     if values.is_empty() {
         return SignedIntervalStats {
+            count: 0,
             min: None,
             mean: None,
+            population_stddev: None,
             p50: None,
             p95: None,
             p99: None,
@@ -1143,8 +1163,10 @@ fn summarize_i64(values: &[i64]) -> SignedIntervalStats {
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
     SignedIntervalStats {
+        count: values.len(),
         min: sorted.first().copied(),
         mean: Some(mean_i64(values)),
+        population_stddev: Some(population_stddev_i64(values)),
         p50: Some(percentile_r7_i64(&sorted, 0.50)),
         p95: Some(percentile_r7_i64(&sorted, 0.95)),
         p99: Some(percentile_r7_i64(&sorted, 0.99)),
@@ -1200,6 +1222,26 @@ fn mean_u64(values: &[u64]) -> f64 {
 
 fn mean_i64(values: &[i64]) -> f64 {
     values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64
+}
+
+fn population_stddev_u64(values: &[u64]) -> f64 {
+    let mean = mean_u64(values);
+    (values
+        .iter()
+        .map(|value| (*value as f64 - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64)
+        .sqrt()
+}
+
+fn population_stddev_i64(values: &[i64]) -> f64 {
+    let mean = mean_i64(values);
+    (values
+        .iter()
+        .map(|value| (*value as f64 - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64)
+        .sqrt()
 }
 
 fn percentile_r7_u64(sorted: &[u64], percentile: f64) -> f64 {

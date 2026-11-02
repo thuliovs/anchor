@@ -1,5 +1,7 @@
 # 🏗️ Anchor: Briefing de Arquitetura e Engenharia
 
+> Nota histórica: este briefing preserva a visão técnica inicial. Expressões como “curar” ou “eliminar enjoo” representam a ambição original do projeto, não alegação clínica demonstrada.
+
 **Status do Projeto:** `Infraestrutura Pronta` | `Monorepo Configurado` **Arquitetura:** Sistema Distribuído de Baixa Latência (Sensor -> Overlay)
 
 ### 1\. O Problema de Engenharia

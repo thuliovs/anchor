@@ -34,9 +34,13 @@ lerna-debug.log*
 # Frontend build artifacts
 *.tsbuildinfo
 
-# Motion datasets generated locally by the headless desktop recorder
+# Motion artifacts generated locally for physical validation
 artifacts/motion-datasets/
 artifacts/motion-calibrations/
+artifacts/motion-filtering/
+artifacts/motion-measurements/
+artifacts/motion-latency-datasets/
+artifacts/motion-latency-measurements/
 
 # Android
 **/android/.gradle/
